@@ -1,0 +1,46 @@
+# config/rules.yaml
+# Règles de pré-filtrage AVANT l'envoi à l'IA
+# Adapté à la réalité de piter.at (missions IT en régie)
+
+# Mots-clés OBLIGATOIRES dans le titre ou la description (au moins un doit matcher)
+# Sur piter.at les missions sont toutes IT — on peut laisser large ou cibler
+keywords_include:
+  - développement
+  - dev
+  - java
+  - python
+  - angular
+  - react
+  - data
+  - devops
+  - cloud
+  - infrastructure
+  - réseau
+  - conseil
+  - business analyse
+  - product owner
+  - scrum
+  - chef de projet
+  - architecture
+  - sécurité
+  - fullstack
+  - backend
+  - frontend
+
+# Mots-clés EXCLUS (si présents → rejet immédiat)
+# Sur piter.at, toutes les offres sont IT donc très peu d'exclusions
+keywords_exclude: []
+
+# Budget min en € (TJM détecté dans le texte de la description)
+# Laisser null pour ne pas filtrer sur le budget
+budget_min: null
+budget_max: null
+
+# Délai minimum restant (en jours) — pas de date limite sur piter.at
+min_days_remaining: 0
+
+# Types de marchés acceptés (vide = tout)
+market_types: []
+
+# Score IA minimum pour apparaître dans le dashboard (0-10)
+ai_score_threshold: 4.0
