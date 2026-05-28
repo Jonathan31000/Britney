@@ -1,16 +1,24 @@
 """
 scraper/rules.py
 Filtrage par règles métier AVANT le scoring IA.
+Les règles sont lues depuis la table `config` en base (V2).
 """
-import yaml
 import re
 from datetime import datetime, date
 from typing import Tuple
 
 
-def load_rules(path: str = "config/rules.yaml") -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+def load_rules() -> dict:
+    """Charge les règles depuis la base de données."""
+    from .database import get_config
+    return {
+        "keywords_include":   get_config("keywords_include"),
+        "keywords_exclude":   get_config("keywords_exclude"),
+        "budget_min":         get_config("budget_min"),
+        "budget_max":         get_config("budget_max"),
+        "min_days_remaining": get_config("min_days_remaining"),
+        "ai_score_threshold": get_config("ai_score_threshold"),
+    }
 
 
 def _normalize(text: str) -> str:
@@ -55,21 +63,18 @@ def apply_rules(offre: dict, rules: dict) -> Tuple[bool, str]:
     date_limite_str = offre.get("date_limite")
     if date_limite_str and min_days > 0:
         try:
-            # Accepte plusieurs formats
+            dl = None
             for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
                 try:
                     dl = datetime.strptime(date_limite_str, fmt).date()
                     break
                 except ValueError:
                     continue
-            else:
-                dl = None
-
             if dl:
                 remaining = (dl - date.today()).days
                 if remaining < min_days:
                     return False, f"délai trop court ({remaining} jours restants)"
         except Exception:
-            pass  # date non parseable → on laisse passer
+            pass
 
     return True, ""

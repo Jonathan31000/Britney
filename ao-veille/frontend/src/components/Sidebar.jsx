@@ -3,9 +3,10 @@ import React from 'react'
 import { NavLink } from 'react-router-dom'
 
 const nav = [
-  { to: '/',        label: 'Tableau de bord',  icon: '▦' },
-  { to: '/offres',  label: 'Appels d\'offres', icon: '◈' },
-  { to: '/logs',    label: 'Activité',          icon: '≡' },
+  { to: '/',           label: 'Tableau de bord',  icon: '▦' },
+  { to: '/offres',     label: "Appels d'offres",  icon: '◈' },
+  { to: '/logs',       label: 'Activité',          icon: '≡' },
+  { to: '/parametres', label: 'Paramètres',        icon: '⚙' },
 ]
 
 const css = `
@@ -47,7 +48,7 @@ export default function Sidebar() {
             </NavLink>
           ))}
         </nav>
-        <div className="sidebar-footer">v1.0 · piter.at</div>
+        <div className="sidebar-footer">v2.0 · piter.at</div>
       </aside>
     </>
   )

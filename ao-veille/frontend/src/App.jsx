@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard'
 import Offres from './pages/Offres'
 import OffreDetail from './pages/OffreDetail'
 import Logs from './pages/Logs'
+import Parametres from './pages/Parametres'
 
 const css = `
   .layout { display:flex; min-height:100vh; }
@@ -20,10 +21,11 @@ export default function App() {
         <Sidebar />
         <main className="main">
           <Routes>
-            <Route path="/"           element={<Dashboard />} />
-            <Route path="/offres"     element={<Offres />} />
-            <Route path="/offres/:id" element={<OffreDetail />} />
-            <Route path="/logs"       element={<Logs />} />
+            <Route path="/"            element={<Dashboard />} />
+            <Route path="/offres"      element={<Offres />} />
+            <Route path="/offres/:id"  element={<OffreDetail />} />
+            <Route path="/logs"        element={<Logs />} />
+            <Route path="/parametres"  element={<Parametres />} />
           </Routes>
         </main>
       </div>

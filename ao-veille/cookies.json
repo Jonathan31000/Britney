@@ -1,0 +1,52 @@
+[
+  {
+    "name": "_GRECAPTCHA",
+    "value": "09AKhCRwioIpC2Zd2oFa_YuilwP6KaGmCi-VIqhTCXX5Hr0bcBRLX2h7lIsCVV8tnsduxHmnpB3aYh2qwHqLQ8sJs",
+    "domain": "www.google.com",
+    "path": "/recaptcha",
+    "expires": 1795336122.838833,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "http-cookie",
+    "value": "1779784121.137.26688.345667|c9d70c86bd410ead7a18c40a93c98bb7",
+    "domain": "piter.at",
+    "path": "/",
+    "expires": 1779956921.915651,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "REMEMBERME",
+    "value": "App.Entity.User%3Acy5wcmVzdG9uQHUtbmVlZC5mcg~~%3A1780388922%3Au51WKEEakPxY_7PT-XOYPV2QEGv9eksVc4Sk5gwHm10~qxUnQCO4dnDf8R5z16i_HVMQ7aSEroqZxks0VAQ3BRE~",
+    "domain": "piter.at",
+    "path": "/",
+    "expires": 1780388924.033118,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "PITERSESSID_V3_31_6",
+    "value": "259b965b6ef18fd00366507696d180c1",
+    "domain": "piter.at",
+    "path": "/",
+    "expires": 1779787724.033209,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "piter",
+    "value": "!insee_piter=wait!recaptcha_piter=wait",
+    "domain": "piter.at",
+    "path": "/",
+    "expires": 1811320124,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax"
+  }
+]

@@ -5,7 +5,7 @@ API REST FastAPI — expose les offres au dashboard React.
 import os
 import json
 import sqlite3
-from typing import Optional, List
+from typing import Optional, List, Any
 from datetime import datetime
 
 from fastapi import FastAPI, Query, HTTPException
@@ -19,7 +19,7 @@ DB_PATH = os.getenv("DB_PATH", "./data/offres.db")
 app = FastAPI(
     title="AO Veille API",
     description="API de veille des appels d'offres",
-    version="1.0.0",
+    version="2.0.0",
 )
 
 app.add_middleware(
@@ -69,7 +69,6 @@ class OffreOut(BaseModel):
     url: Optional[str]
     statut: str
     created_at: str
-    # Score IA (joint)
     score: Optional[float] = None
     resume: Optional[str] = None
     points_forts: Optional[List[str]] = None
@@ -93,8 +92,17 @@ class TriggerOut(BaseModel):
     message: str
 
 
+class ConfigValueIn(BaseModel):
+    value: Any
+
+
+class ConfigBulkIn(BaseModel):
+    # clé libre → valeur quelconque
+    model_config = {"extra": "allow"}
+
+
 # ---------------------------------------------------------------------------
-# Routes
+# Routes — health
 # ---------------------------------------------------------------------------
 
 @app.get("/", tags=["health"])
@@ -102,15 +110,19 @@ def health():
     return {"status": "ok", "timestamp": datetime.now().isoformat()}
 
 
+# ---------------------------------------------------------------------------
+# Routes — offres
+# ---------------------------------------------------------------------------
+
 @app.get("/api/offres", response_model=List[OffreOut], tags=["offres"])
 def list_offres(
-    source: Optional[str]          = Query(None),
-    statut: Optional[str]          = Query(None),
-    recommandation: Optional[str]  = Query(None),
-    search: Optional[str]          = Query(None),
-    score_min: Optional[float]     = Query(None),
-    limit: int                     = Query(50, ge=1, le=200),
-    offset: int                    = Query(0, ge=0),
+    source: Optional[str]         = Query(None),
+    statut: Optional[str]         = Query(None),
+    recommandation: Optional[str] = Query(None),
+    search: Optional[str]         = Query(None),
+    score_min: Optional[float]    = Query(None),
+    limit: int                    = Query(50, ge=1, le=200),
+    offset: int                   = Query(0, ge=0),
 ):
     conn = get_db()
     try:
@@ -167,6 +179,10 @@ def get_offre(offre_id: int):
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Routes — stats & logs
+# ---------------------------------------------------------------------------
+
 @app.get("/api/stats", response_model=StatsOut, tags=["stats"])
 def get_stats():
     conn = get_db()
@@ -174,13 +190,13 @@ def get_stats():
         def count(sql, params=()):
             return conn.execute(sql, params).fetchone()[0] or 0
 
-        total      = count("SELECT COUNT(*) FROM offres")
-        nouvelles  = count("SELECT COUNT(*) FROM offres WHERE statut='nouveau'")
-        filtre_ok  = count("SELECT COUNT(*) FROM offres WHERE statut IN ('filtre_ok','scored')")
-        scored     = count("SELECT COUNT(*) FROM offres WHERE statut='scored'")
-        go         = count("SELECT COUNT(*) FROM scores WHERE recommandation='go'")
-        no_go      = count("SELECT COUNT(*) FROM scores WHERE recommandation='no_go'")
-        a_etudier  = count("SELECT COUNT(*) FROM scores WHERE recommandation='a_etudier'")
+        total     = count("SELECT COUNT(*) FROM offres")
+        nouvelles = count("SELECT COUNT(*) FROM offres WHERE statut='nouveau'")
+        filtre_ok = count("SELECT COUNT(*) FROM offres WHERE statut IN ('filtre_ok','scored')")
+        scored    = count("SELECT COUNT(*) FROM offres WHERE statut='scored'")
+        go        = count("SELECT COUNT(*) FROM scores WHERE recommandation='go'")
+        no_go     = count("SELECT COUNT(*) FROM scores WHERE recommandation='no_go'")
+        a_etudier = count("SELECT COUNT(*) FROM scores WHERE recommandation='a_etudier'")
 
         sources_rows = conn.execute(
             "SELECT source, COUNT(*) as n FROM offres GROUP BY source"
@@ -208,9 +224,67 @@ def get_logs(limit: int = Query(50, ge=1, le=500)):
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Routes — config (V2)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/config", tags=["config"])
+def get_config_all():
+    """Retourne tous les paramètres regroupés par section."""
+    import sys, os as _os
+    sys.path.insert(0, _os.path.dirname(_os.path.dirname(__file__)))
+    from scraper.database import get_all_config
+    return get_all_config()
+
+
+@app.put("/api/config/{key}", tags=["config"])
+def update_config_one(key: str, body: ConfigValueIn):
+    """Met à jour un seul paramètre."""
+    import sys, os as _os
+    sys.path.insert(0, _os.path.dirname(_os.path.dirname(__file__)))
+    from scraper.database import set_config
+    try:
+        set_config(key, body.value)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Clé inconnue : '{key}'")
+    return {"status": "ok", "key": key, "updated_at": datetime.now().isoformat()}
+
+
+@app.put("/api/config", tags=["config"])
+def update_config_bulk(body: dict):
+    """Met à jour plusieurs paramètres en une seule requête."""
+    import sys, os as _os
+    sys.path.insert(0, _os.path.dirname(_os.path.dirname(__file__)))
+    from scraper.database import set_config
+    updated = []
+    errors = []
+    for key, value in body.items():
+        try:
+            set_config(key, value)
+            updated.append(key)
+        except KeyError:
+            errors.append(key)
+    if errors:
+        raise HTTPException(status_code=404, detail=f"Clés inconnues : {errors}")
+    return {"status": "ok", "updated": updated}
+
+
+@app.post("/api/config/reset", tags=["config"])
+def reset_config_all():
+    """Remet tous les paramètres à leurs valeurs par défaut."""
+    import sys, os as _os
+    sys.path.insert(0, _os.path.dirname(_os.path.dirname(__file__)))
+    from scraper.database import reset_config, CONFIG_DEFAULTS
+    reset_config()
+    return {"status": "ok", "message": f"{len(CONFIG_DEFAULTS)} paramètres réinitialisés"}
+
+
+# ---------------------------------------------------------------------------
+# Routes — actions
+# ---------------------------------------------------------------------------
+
 @app.post("/api/trigger/scrape", response_model=TriggerOut, tags=["actions"])
 def trigger_scrape():
-    """Déclenche manuellement un scraping (appel depuis le dashboard)."""
     try:
         import sys
         sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -223,7 +297,6 @@ def trigger_scrape():
 
 @app.post("/api/trigger/score", response_model=TriggerOut, tags=["actions"])
 def trigger_score():
-    """Déclenche manuellement le scoring IA."""
     try:
         import sys
         sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -234,9 +307,12 @@ def trigger_score():
         return TriggerOut(status="error", message=str(e))
 
 
+# ---------------------------------------------------------------------------
+# Routes — export
+# ---------------------------------------------------------------------------
+
 @app.get("/api/export/csv", tags=["export"])
 def export_csv():
-    """Export CSV des offres scorées."""
     import csv
     import io
     from fastapi.responses import StreamingResponse

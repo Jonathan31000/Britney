@@ -1,6 +1,7 @@
 """
 scraper/ai_scorer.py
 Scoring des appels d'offres via l'API Anthropic (Claude).
+Le contexte entreprise et le template de prompt sont lus depuis la table `config` (V2).
 """
 import os
 import json
@@ -8,59 +9,50 @@ import logging
 import anthropic
 from dotenv import load_dotenv
 
-from .database import get_offres_a_scorer, insert_score, update_statut, log_event
+from .database import get_offres_a_scorer, get_config, insert_score, update_statut, log_event
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-COMPANY_CONTEXT = os.getenv(
-    "COMPANY_CONTEXT",
-    "Entreprise généraliste en services informatiques."
-)
-
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-
 
 SYSTEM_PROMPT = """Tu es un expert en réponse aux appels d'offres publics et privés.
 Tu analyses des offres de marché et évalues leur pertinence pour une entreprise donnée.
 Tu réponds UNIQUEMENT en JSON valide, sans markdown, sans texte supplémentaire."""
 
 
-def build_user_prompt(offre: dict, context: str) -> str:
-    budget_str = ""
+def build_user_prompt(offre: dict) -> str:
+    """Construit le prompt en injectant les données de l'offre dans le template stocké en base."""
+    company_context = get_config("company_context")
+    prompt_template = get_config("prompt_template")
+
+    budget_str = "non renseigné"
     if offre.get("budget_max"):
-        budget_str = f"Budget estimé : {offre.get('budget_min','?')} – {offre['budget_max']} €"
+        if offre.get("budget_min"):
+            budget_str = f"{offre['budget_min']} – {offre['budget_max']}"
+        else:
+            budget_str = str(offre["budget_max"])
 
-    return f"""Contexte de notre entreprise :
-{context}
+    return prompt_template.format(
+        company_context=company_context,
+        titre=offre.get("titre", "N/A"),
+        acheteur=offre.get("acheteur", "N/A"),
+        budget=budget_str,
+        date_limite=offre.get("date_limite", "N/A"),
+        source=offre.get("source", "N/A"),
+        description=offre.get("description", "Pas de description disponible")[:2000],
+    )
 
----
-Appel d'offres à analyser :
-Titre : {offre.get('titre', 'N/A')}
-Acheteur : {offre.get('acheteur', 'N/A')}
-{budget_str}
-Date limite : {offre.get('date_limite', 'N/A')}
-Source : {offre.get('source', 'N/A')}
 
-Description :
-{offre.get('description', 'Pas de description disponible')[:2000]}
-
----
-Réponds avec ce JSON (et uniquement ce JSON) :
-{{
-  "score": <nombre entre 0 et 10>,
-  "resume": "<résumé de l'offre en 2 phrases>",
-  "points_forts": ["<point 1>", "<point 2>", ...],
-  "points_faibles": ["<point 1>", "<point 2>", ...],
-  "recommandation": "<go | no_go | a_etudier>",
-  "justification": "<explication courte de la note>"
-}}
-
-Critères de scoring :
-- 8-10 : Offre idéale, forte adéquation métier, budget correct, délai raisonnable
-- 5-7  : Intéressante mais avec des réserves (compétences partielles, budget incertain...)
-- 0-4  : Peu pertinente (hors métier, budget trop faible, délai trop court...)
-"""
+def _recommandation_from_score(score: float) -> str:
+    """Calcule la recommandation selon les seuils paramétrables."""
+    go_threshold     = get_config("score_go_threshold")
+    etudier_threshold = get_config("score_etudier_threshold")
+    if score >= go_threshold:
+        return "go"
+    if score >= etudier_threshold:
+        return "a_etudier"
+    return "no_go"
 
 
 def score_offre(offre: dict) -> dict:
@@ -71,12 +63,11 @@ def score_offre(offre: dict) -> dict:
             max_tokens=1000,
             system=SYSTEM_PROMPT,
             messages=[
-                {"role": "user", "content": build_user_prompt(offre, COMPANY_CONTEXT)}
+                {"role": "user", "content": build_user_prompt(offre)}
             ]
         )
 
         raw = message.content[0].text
-        # Nettoyage au cas où des backticks seraient présents
         clean = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         result = json.loads(clean)
 
@@ -85,7 +76,12 @@ def score_offre(offre: dict) -> dict:
         result.setdefault("resume", "")
         result.setdefault("points_forts", [])
         result.setdefault("points_faibles", [])
-        result.setdefault("recommandation", "a_etudier")
+        result.setdefault("justification", "")
+
+        # Recalcule la recommandation selon les seuils paramétrés
+        # (au cas où Claude retourne une valeur hors-seuil)
+        score = float(result["score"])
+        result["recommandation"] = _recommandation_from_score(score)
 
         return result
 

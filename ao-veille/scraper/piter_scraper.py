@@ -1,14 +1,6 @@
 """
 scraper/piter_scraper.py
 Scraper pour piter.at — authentification par cookies de session (contournement reCAPTCHA).
-
-COMMENT OBTENIR VOS COOKIES :
-1. Connectez-vous manuellement sur https://piter.at dans Chrome
-2. F12 → Application → Cookies → https://piter.at
-3. Copiez la valeur du cookie "PHPSESSID" (ou similaire)
-4. Collez-la dans le fichier .env : PITER_SESSION_COOKIE=valeur
-   Ou exportez tous les cookies via l'extension "Cookie-Editor" (format JSON)
-   et sauvegardez dans cookies.json à la racine du projet.
 """
 import os
 import re
@@ -28,12 +20,11 @@ from .rules import load_rules, apply_rules
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-BASE_URL     = os.getenv("PITER_BASE_URL", "https://piter.at")
-EMAIL        = os.getenv("PITER_EMAIL", "")
-PASSWORD     = os.getenv("PITER_PASSWORD", "")
+BASE_URL       = os.getenv("PITER_BASE_URL", "https://piter.at")
+EMAIL          = os.getenv("PITER_EMAIL", "")
+PASSWORD       = os.getenv("PITER_PASSWORD", "")
 SESSION_COOKIE = os.getenv("PITER_SESSION_COOKIE", "")
-COOKIES_FILE = "cookies.json"
-RULES_PATH   = "config/rules.yaml"
+COOKIES_FILE   = "cookies.json"
 
 LIST_URL = f"{BASE_URL}/prestataire/consultation"
 
@@ -56,12 +47,6 @@ def create_session() -> requests.Session:
 
 
 def load_session_from_cookies(session: requests.Session) -> bool:
-    """
-    Méthode 1 : charge les cookies depuis cookies.json (export Cookie-Editor).
-    Méthode 2 : utilise PITER_SESSION_COOKIE depuis .env.
-    Méthode 3 : tente le login classique (peut échouer si reCAPTCHA actif).
-    """
-
     # --- Méthode 1 : fichier cookies.json ---
     if os.path.exists(COOKIES_FILE):
         try:
@@ -73,7 +58,6 @@ def load_session_from_cookies(session: requests.Session) -> bool:
                     c.get("value", ""),
                     domain=c.get("domain", "piter.at").lstrip(".")
                 )
-            # Vérification
             resp = session.get(LIST_URL, timeout=15, allow_redirects=True)
             if "connexion" not in resp.url and resp.status_code == 200:
                 logger.info(f"[piter] Connecté via cookies.json → {resp.url}")
@@ -85,7 +69,6 @@ def load_session_from_cookies(session: requests.Session) -> bool:
 
     # --- Méthode 2 : cookie manuel dans .env ---
     if SESSION_COOKIE:
-        # Format attendu : "nom=valeur; nom2=valeur2"
         for pair in SESSION_COOKIE.split(";"):
             pair = pair.strip()
             if "=" in pair:
@@ -98,50 +81,44 @@ def load_session_from_cookies(session: requests.Session) -> bool:
             return True
         logger.warning("[piter] PITER_SESSION_COOKIE invalide ou expiré")
 
-    # --- Méthode 3 : login classique (fonctionne si reCAPTCHA désactivé) ---
+    # --- Méthode 3 : login classique ---
     logger.info("[piter] Tentative login classique...")
     return login_classic(session)
 
 
 def login_classic(session: requests.Session) -> bool:
-    """Login email/password — bloqué si reCAPTCHA actif."""
     login_url = f"{BASE_URL}/connexion"
     try:
         resp = session.get(login_url, timeout=15)
         soup = BeautifulSoup(resp.text, "lxml")
 
-        # Token CSRF Symfony : login[_token]
         csrf = ""
         field = soup.find("input", {"name": "login[_token]"})
         if field:
             csrf = field.get("value", "")
-            logger.info("[piter] Token CSRF trouvé")
 
-        # Token reCAPTCHA (champ login[recaptcha]) — on tente avec valeur vide
         recaptcha_val = ""
         recap_field = soup.find("input", {"name": "login[recaptcha]"})
         if recap_field:
             recaptcha_val = recap_field.get("value", "")
 
         payload = {
-            "login[email]":      EMAIL,
-            "login[password]":   PASSWORD,
+            "login[email]":       EMAIL,
+            "login[password]":    PASSWORD,
             "login[remember_me]": "1",
-            "login[_token]":     csrf,
-            "login[recaptcha]":  recaptcha_val,
+            "login[_token]":      csrf,
+            "login[recaptcha]":   recaptcha_val,
         }
 
         resp2 = session.post(login_url, data=payload, timeout=15, allow_redirects=True)
-
         if "connexion" not in resp2.url and resp2.status_code == 200:
             logger.info(f"[piter] Login classique OK → {resp2.url}")
             log_event("piter.at", "login_ok", resp2.url)
             return True
         else:
-            logger.error(f"[piter] Login classique échoué (reCAPTCHA probable) → {resp2.url}")
+            logger.error(f"[piter] Login classique échoué → {resp2.url}")
             log_event("piter.at", "login_fail", "recaptcha_bloque")
             return False
-
     except Exception as e:
         logger.error(f"[piter] Erreur login : {e}")
         log_event("piter.at", "login_error", str(e))
@@ -189,7 +166,6 @@ def parse_row(row: BeautifulSoup) -> Optional[dict]:
         data_url = row.get("data-url", "")
         url = BASE_URL + data_url if data_url.startswith("/") else data_url
 
-        # Client via tooltip
         client = ""
         img = tds[2].find("img", {"data-tooltip-target": True})
         if img:
@@ -198,7 +174,6 @@ def parse_row(row: BeautifulSoup) -> Optional[dict]:
                 c = tip.find(class_="js-tooltip-content")
                 client = c.get_text(strip=True) if c else ""
 
-        # Entité
         entite_span = tds[3].find("span", class_="min-w-32")
         entite = entite_span.get_text(strip=True) if entite_span else ""
         if entite_span and entite_span.get("data-tooltip-target"):
@@ -207,7 +182,6 @@ def parse_row(row: BeautifulSoup) -> Optional[dict]:
                 c = tip.find(class_="js-tooltip-content")
                 if c: entite = c.get_text(strip=True)
 
-        # Mission
         mission_span = tds[4].find("span", class_="min-w-32") if len(tds) > 4 else None
         mission = mission_span.get_text(strip=True) if mission_span else ""
         if mission_span and mission_span.get("data-tooltip-target"):
@@ -216,7 +190,6 @@ def parse_row(row: BeautifulSoup) -> Optional[dict]:
                 c = tip.find(class_="js-tooltip-content")
                 if c: mission = c.get_text(strip=True)
 
-        # Niveau / Lieu
         niveau = tds[5].find("span").get_text(strip=True) if len(tds) > 5 and tds[5].find("span") else ""
         lieu_span = tds[6].find("span") if len(tds) > 6 else None
         lieu = lieu_span.get_text(strip=True) if lieu_span else ""
@@ -247,7 +220,6 @@ def parse_row(row: BeautifulSoup) -> Optional[dict]:
 
 
 def enrich_from_panel(soup: BeautifulSoup, offre: dict) -> dict:
-    """Enrichit avec le panneau détail déjà présent dans la page liste."""
     token = offre.get("_token", "")
     panel = soup.find("div", {"id": token, "class": re.compile("js-consultation-info")})
     if not panel:
@@ -306,9 +278,79 @@ def _norm_date(text: str) -> str:
 # Point d'entrée
 # ---------------------------------------------------------------------------
 
+def load_session_from_cookies(session: requests.Session) -> bool:
+    """
+    Méthode 1 : cookies.json
+    Méthode 2 : PITER_SESSION_COOKIE dans .env
+    Méthode 3 : Playwright (refresh automatique)
+    Méthode 4 : login classique (fallback)
+    """
+
+    # --- Méthode 1 : fichier cookies.json ---
+    if os.path.exists(COOKIES_FILE):
+        try:
+            with open(COOKIES_FILE, "r") as f:
+                cookies = json.load(f)
+            for c in cookies:
+                session.cookies.set(
+                    c.get("name", ""),
+                    c.get("value", ""),
+                    domain=c.get("domain", "piter.at").lstrip(".")
+                )
+            resp = session.get(LIST_URL, timeout=15, allow_redirects=True)
+            if "connexion" not in resp.url and resp.status_code == 200:
+                logger.info(f"[piter] Connecté via cookies.json → {resp.url}")
+                log_event("piter.at", "login_ok", "cookies.json")
+                return True
+            logger.warning("[piter] cookies.json expiré — tentative Playwright...")
+        except Exception as e:
+            logger.warning(f"[piter] Erreur lecture cookies.json : {e}")
+
+    # --- Méthode 2 : cookie manuel dans .env ---
+    if SESSION_COOKIE:
+        for pair in SESSION_COOKIE.split(";"):
+            pair = pair.strip()
+            if "=" in pair:
+                name, value = pair.split("=", 1)
+                session.cookies.set(name.strip(), value.strip(), domain="piter.at")
+        resp = session.get(LIST_URL, timeout=15, allow_redirects=True)
+        if "connexion" not in resp.url and resp.status_code == 200:
+            logger.info(f"[piter] Connecté via PITER_SESSION_COOKIE → {resp.url}")
+            log_event("piter.at", "login_ok", "session_cookie")
+            return True
+        logger.warning("[piter] PITER_SESSION_COOKIE invalide — tentative Playwright...")
+
+    # --- Méthode 3 : Playwright (refresh automatique) ---
+    logger.info("[piter] Tentative renouvellement cookies via Playwright...")
+    try:
+        from .auth_playwright import ensure_cookies
+        if ensure_cookies():
+            # Recharger les cookies fraîchement générés
+            session.cookies.clear()
+            with open(COOKIES_FILE, "r") as f:
+                cookies = json.load(f)
+            for c in cookies:
+                session.cookies.set(
+                    c.get("name", ""),
+                    c.get("value", ""),
+                    domain=c.get("domain", "piter.at").lstrip(".")
+                )
+            resp = session.get(LIST_URL, timeout=15, allow_redirects=True)
+            if "connexion" not in resp.url and resp.status_code == 200:
+                logger.info(f"[piter] Connecté via Playwright → {resp.url}")
+                log_event("piter.at", "login_ok", "playwright")
+                return True
+    except Exception as e:
+        logger.error(f"[piter] Playwright échoué : {e}")
+
+    # --- Méthode 4 : login classique ---
+    logger.info("[piter] Tentative login classique...")
+    return login_classic(session)
+
 def run_scraper():
     logger.info("[piter] Démarrage scraping...")
-    rules = load_rules(RULES_PATH)
+    # Les règles sont rechargées depuis la DB à chaque scraping
+    rules = load_rules()
 
     session = create_session()
     if not load_session_from_cookies(session):
