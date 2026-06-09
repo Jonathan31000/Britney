@@ -1,80 +1,77 @@
 """
-scraper/rules.py
-Filtrage par règles métier AVANT le scoring IA.
-Les règles sont lues depuis la table `config` en base (V2).
+scraper/rules.py — Filtrage des offres par règles métier (par utilisateur)
 """
+from datetime import date, datetime
 import re
-from datetime import datetime, date
-from typing import Tuple
+from typing import Optional
 
 
-def load_rules() -> dict:
-    """Charge les règles depuis la base de données."""
-    from .database import get_config
-    return {
-        "keywords_include":   get_config("keywords_include"),
-        "keywords_exclude":   get_config("keywords_exclude"),
-        "budget_min":         get_config("budget_min"),
-        "budget_max":         get_config("budget_max"),
-        "min_days_remaining": get_config("min_days_remaining"),
-        "ai_score_threshold": get_config("ai_score_threshold"),
-    }
+def _extract_tjm(text: str) -> Optional[float]:
+    """Détecte un TJM dans un texte. Retourne None si non trouvé."""
+    matches = re.findall(r'(\d{3,4})\s*€', text)
+    values = [float(m) for m in matches if 100 <= float(m) <= 5000]
+    return max(values) if values else None
 
 
-def _normalize(text: str) -> str:
-    return text.lower().strip() if text else ""
-
-
-def apply_rules(offre: dict, rules: dict) -> Tuple[bool, str]:
+def apply_rules(offre: dict, rules: dict) -> tuple[bool, str]:
     """
-    Applique les règles sur une offre.
-    Retourne (True, "") si OK, (False, "raison") si rejetée.
-    """
-    texte = _normalize(f"{offre.get('titre','')} {offre.get('description','')}")
+    Applique les règles métier d'un utilisateur à une offre.
 
-    # 1. Mots-clés exclus
+    Args:
+        offre: dict avec titre, description, budget_max, date_limite
+        rules: dict chargé depuis user_config (keywords_include, etc.)
+
+    Returns:
+        (passed: bool, reason: str)
+    """
+    text = f"{offre.get('titre', '')} {offre.get('description', '')}".lower()
+
+    # 1. Mots-clés exclus (prioritaire)
     for kw in rules.get("keywords_exclude", []):
-        if kw.lower() in texte:
-            return False, f"mot-clé exclu : '{kw}'"
+        if kw.lower() in text:
+            return False, f"mot_exclu:{kw}"
 
-    # 2. Mots-clés obligatoires (au moins un)
+    # 2. Mots-clés obligatoires
     includes = rules.get("keywords_include", [])
     if includes:
-        found = any(kw.lower() in texte for kw in includes)
-        if not found:
-            return False, "aucun mot-clé obligatoire trouvé"
+        if not any(kw.lower() in text for kw in includes):
+            return False, "aucun_mot_cle_obligatoire"
 
     # 3. Budget
-    budget_min_rule = rules.get("budget_min")
-    budget_max_rule = rules.get("budget_max")
-    offre_budget_max = offre.get("budget_max")
-    offre_budget_min = offre.get("budget_min")
+    budget_min = rules.get("budget_min")
+    budget_max = rules.get("budget_max")
+    if budget_min is not None or budget_max is not None:
+        tjm = offre.get("budget_max") or _extract_tjm(offre.get("description", ""))
+        if tjm is not None:
+            if budget_min and tjm < budget_min:
+                return False, f"tjm_trop_bas:{tjm}"
+            if budget_max and tjm > budget_max:
+                return False, f"tjm_trop_eleve:{tjm}"
 
-    if budget_min_rule and offre_budget_max is not None:
-        if offre_budget_max < budget_min_rule:
-            return False, f"budget trop faible ({offre_budget_max} < {budget_min_rule})"
-
-    if budget_max_rule and offre_budget_min is not None:
-        if offre_budget_min > budget_max_rule:
-            return False, f"budget trop élevé ({offre_budget_min} > {budget_max_rule})"
-
-    # 4. Délai restant
+    # 4. Délai minimum
     min_days = rules.get("min_days_remaining", 0)
-    date_limite_str = offre.get("date_limite")
-    if date_limite_str and min_days > 0:
-        try:
-            dl = None
-            for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
-                try:
-                    dl = datetime.strptime(date_limite_str, fmt).date()
-                    break
-                except ValueError:
-                    continue
-            if dl:
+    if min_days and min_days > 0:
+        date_limite = offre.get("date_limite")
+        if date_limite:
+            try:
+                dl = datetime.strptime(date_limite, "%Y-%m-%d").date()
                 remaining = (dl - date.today()).days
                 if remaining < min_days:
-                    return False, f"délai trop court ({remaining} jours restants)"
-        except Exception:
-            pass
+                    return False, f"delai_trop_court:{remaining}j"
+            except ValueError:
+                pass
 
-    return True, ""
+    return True, "ok"
+
+
+def load_rules_for_user(user_id: int) -> dict:
+    """Charge les règles depuis la config de l'utilisateur."""
+    from scraper.database import get_user_config
+    return {
+        "keywords_include":   get_user_config(user_id, "keywords_include") or [],
+        "keywords_exclude":   get_user_config(user_id, "keywords_exclude") or [],
+        "budget_min":         get_user_config(user_id, "budget_min"),
+        "budget_max":         get_user_config(user_id, "budget_max"),
+        "min_days_remaining": get_user_config(user_id, "min_days_remaining") or 0,
+        "ai_score_threshold": get_user_config(user_id, "ai_score_threshold") or 4.0,
+    }

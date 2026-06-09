@@ -1,40 +1,72 @@
-// src/hooks/useApi.js
-import { useState, useEffect, useCallback } from 'react'
+// frontend/src/hooks/useApi.js
+import { useCallback } from "react";
+import { useAuth } from "./useAuth";
 
-const BASE = '/api'
+export function useApi() {
+  const { token, logout } = useAuth();
 
-export function useFetch(url, deps = []) {
-  const [data, setData]     = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError]   = useState(null)
+  const request = useCallback(
+    async (path, options = {}) => {
+      const headers = {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options.headers || {}),
+      };
 
-  const load = useCallback(async () => {
-    if (!url) return
-    setLoading(true)
-    setError(null)
-    try {
-      const r = await fetch(BASE + url)
-      if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      setData(await r.json())
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setLoading(false)
-    }
-  }, [url])
+      const res = await fetch(path, { ...options, headers });
 
-  useEffect(() => { load() }, [load, ...deps])
+      // Token expiré → déconnexion automatique
+      if (res.status === 401) {
+        logout();
+        return null;
+      }
 
-  return { data, loading, error, refresh: load }
-}
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || `Erreur ${res.status}`);
+      }
 
-export async function triggerAction(path) {
-  const r = await fetch(BASE + path, { method: 'POST' })
-  return r.json()
-}
+      // Pas de contenu (204)
+      if (res.status === 204) return null;
 
-export function buildOffreUrl(params) {
-  const q = new URLSearchParams()
-  Object.entries(params).forEach(([k, v]) => { if (v !== '' && v != null) q.set(k, v) })
-  return `/offres?${q.toString()}`
+      return res.json();
+    },
+    [token, logout]
+  );
+
+  const get = useCallback((path) => request(path), [request]);
+
+  const post = useCallback(
+    (path, body) =>
+      request(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
+    [request]
+  );
+
+  const put = useCallback(
+    (path, body) =>
+      request(path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }),
+    [request]
+  );
+
+  const del = useCallback(
+    (path) => request(path, { method: "DELETE" }),
+    [request]
+  );
+
+  // Export CSV (réponse binaire)
+  const downloadCsv = useCallback(async () => {
+    const res = await fetch("/api/export/csv", {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "offres.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [token]);
+
+  return { get, post, put, del, downloadCsv };
 }

@@ -1,6 +1,6 @@
 // src/pages/Dashboard.jsx
-import React, { useState } from 'react'
-import { useFetch, triggerAction } from '../hooks/useApi'
+import React, { useState, useEffect, useCallback } from 'react'
+import { useApi } from "../hooks/useApi";
 
 const css = `
   .dash { padding:32px; }
@@ -40,9 +40,23 @@ const css = `
 `
 
 export default function Dashboard() {
-  const { data: stats, loading, refresh } = useFetch('/stats')
+  const { get, post } = useApi()
+  const [stats, setStats] = useState(null)
+  const [loading, setLoading] = useState(true)
   const [toast, setToast] = useState(null)
   const [running, setRunning] = useState(false)
+
+  const loadStats = useCallback(async () => {
+    setLoading(true)
+    try {
+      const data = await get('/api/stats')
+      if (data) setStats(data)
+    } finally {
+      setLoading(false)
+    }
+  }, [get])
+
+  useEffect(() => { loadStats() }, [loadStats])
 
   function showToast(msg) {
     setToast(msg)
@@ -52,19 +66,29 @@ export default function Dashboard() {
   async function handleScrape() {
     setRunning(true)
     showToast('Scraping lancé...')
-    const r = await triggerAction('/trigger/scrape')
-    showToast(r.status === 'ok' ? `Scraping OK : ${r.message}` : `Erreur : ${r.message}`)
-    setRunning(false)
-    refresh()
+    try {
+      const r = await post('/api/trigger/scrape')
+      showToast(r?.status === 'ok' ? `Scraping OK : ${r.message}` : `Erreur`)
+      loadStats()
+    } catch (e) {
+      showToast(`Erreur : ${e.message}`)
+    } finally {
+      setRunning(false)
+    }
   }
 
   async function handleScore() {
     setRunning(true)
     showToast('Scoring IA lancé...')
-    const r = await triggerAction('/trigger/score')
-    showToast(r.status === 'ok' ? `Scoring OK : ${r.message}` : `Erreur : ${r.message}`)
-    setRunning(false)
-    refresh()
+    try {
+      const r = await post('/api/trigger/score')
+      showToast(r?.status === 'ok' ? `Scoring OK : ${r.message}` : `Erreur`)
+      loadStats()
+    } catch (e) {
+      showToast(`Erreur : ${e.message}`)
+    } finally {
+      setRunning(false)
+    }
   }
 
   if (loading) return <div style={{padding:32,color:'var(--text3)'}}>Chargement...</div>
@@ -90,13 +114,12 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Stats principales */}
         <div className="stats-grid">
           {[
-            { v: stats?.total,     l: 'Total offres',    c: 'var(--text)' },
-            { v: stats?.nouvelles, l: 'Non traitées',    c: 'var(--etudier)' },
-            { v: stats?.filtre_ok, l: 'Filtre OK',       c: 'var(--accent)' },
-            { v: stats?.scored,    l: 'Scorées par IA',  c: 'var(--go)' },
+            { v: stats?.total,    l: 'Total offres',   c: 'var(--text)' },
+            { v: stats?.scored,   l: 'Scorées par IA', c: 'var(--go)' },
+            { v: stats?.go,       l: 'GO',             c: 'var(--accent)' },
+            { v: stats?.a_etudier,l: 'À étudier',      c: 'var(--etudier)' },
           ].map(({ v, l, c }) => (
             <div className="stat-card" key={l}>
               <div className="stat-value" style={{ color: c }}>{v ?? 0}</div>
@@ -105,12 +128,11 @@ export default function Dashboard() {
           ))}
         </div>
 
-        {/* Recommandations IA */}
         <div className="reco-grid">
           {[
-            { n: stats?.go,       l: 'GO — À soumettre',     c: 'var(--go)' },
-            { n: stats?.a_etudier,l: 'À étudier',             c: 'var(--etudier)' },
-            { n: stats?.no_go,    l: 'NO GO — Écartées',     c: 'var(--no-go)' },
+            { n: stats?.go,        l: 'GO — À soumettre',  c: 'var(--go)' },
+            { n: stats?.a_etudier, l: 'À étudier',          c: 'var(--etudier)' },
+            { n: stats?.no_go,     l: 'NO GO — Écartées',  c: 'var(--no-go)' },
           ].map(({ n, l, c }) => (
             <div className="reco-card" key={l}>
               <div className="reco-dot" style={{ background: c }} />
@@ -122,7 +144,6 @@ export default function Dashboard() {
           ))}
         </div>
 
-        {/* Sources */}
         {stats?.sources && Object.keys(stats.sources).length > 0 && (
           <div className="sources-card">
             <div className="sources-title">Sources actives</div>

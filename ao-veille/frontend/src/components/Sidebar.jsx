@@ -1,55 +1,64 @@
-// src/components/Sidebar.jsx
-import React from 'react'
-import { NavLink } from 'react-router-dom'
+// frontend/src/components/Sidebar.jsx
+import { NavLink, useNavigate } from "react-router-dom";
+import { useAuth } from "../hooks/useAuth";
 
-const nav = [
-  { to: '/',           label: 'Tableau de bord',  icon: '▦' },
-  { to: '/offres',     label: "Appels d'offres",  icon: '◈' },
-  { to: '/logs',       label: 'Activité',          icon: '≡' },
-  { to: '/parametres', label: 'Paramètres',        icon: '⚙' },
-]
+const LINKS_COMMERCIAL = [
+  { to: "/",           label: "Tableau de bord", icon: "📊" },
+  { to: "/offres",     label: "Appels d'offres",  icon: "📋" },
+  { to: "/parametres", label: "Paramètres",       icon: "⚙️" },
+  { to: "/logs",       label: "Activité",          icon: "📜" },
+];
 
-const css = `
-  .sidebar { display:flex; flex-direction:column; width:220px; min-height:100vh;
-    background:var(--bg2); border-right:1px solid var(--border); padding:0; flex-shrink:0; }
-  .sidebar-logo { padding:28px 24px 20px; border-bottom:1px solid var(--border); }
-  .sidebar-logo h1 { font-size:22px; color:var(--text); line-height:1; }
-  .sidebar-logo p  { font-size:11px; color:var(--text3); margin-top:4px; font-family:var(--font-mono); }
-  .sidebar-nav { padding:16px 0; flex:1; }
-  .sidebar-link { display:flex; align-items:center; gap:12px; padding:10px 24px;
-    color:var(--text2); font-size:13px; transition:all .15s; text-decoration:none; }
-  .sidebar-link:hover { color:var(--text); background:var(--bg3); }
-  .sidebar-link.active { color:var(--accent); background:rgba(79,142,247,.08);
-    border-right:2px solid var(--accent); }
-  .sidebar-icon { font-size:16px; width:20px; text-align:center; }
-  .sidebar-footer { padding:16px 24px; border-top:1px solid var(--border);
-    font-size:11px; color:var(--text3); }
-`
+const LINKS_ADMIN = [
+  { to: "/",                   label: "Tableau de bord", icon: "📊" },
+  { to: "/offres",             label: "Appels d'offres",  icon: "📋" },
+  { to: "/admin/utilisateurs", label: "Utilisateurs",     icon: "👥" },
+  { to: "/parametres",         label: "Paramètres",       icon: "⚙️" },
+  { to: "/logs",               label: "Activité",          icon: "📜" },
+];
 
 export default function Sidebar() {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+  const links = user?.role === "admin" ? LINKS_ADMIN : LINKS_COMMERCIAL;
+
+  async function handleLogout() {
+    await logout();
+    navigate("/login");
+  }
+
   return (
-    <>
-      <style>{css}</style>
-      <aside className="sidebar">
-        <div className="sidebar-logo">
-          <h1>AO Veille</h1>
-          <p>Appels d'offres · IA</p>
+    <aside style={{ width: 220, minHeight: "100vh", background: "var(--surface)", borderRight: "1px solid var(--border)", display: "flex", flexDirection: "column", padding: "1.5rem 0", position: "sticky", top: 0 }}>
+      <div style={{ padding: "0 1.25rem", marginBottom: "2rem" }}>
+        <div style={{ fontSize: "1.2rem", fontWeight: 700, color: "var(--text)" }}>AO Veille</div>
+        <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: 2 }}>Veille appels d'offres</div>
+      </div>
+      <nav style={{ flex: 1 }}>
+        {links.map(({ to, label, icon }) => (
+          <NavLink key={to} to={to} end={to === "/"}
+            style={({ isActive }) => ({
+              display: "flex", alignItems: "center", gap: "0.65rem", padding: "0.6rem 1.25rem",
+              color: isActive ? "var(--accent)" : "var(--text-muted)",
+              background: isActive ? "rgba(79,142,247,0.08)" : "transparent",
+              textDecoration: "none", fontSize: "0.92rem", fontWeight: isActive ? 600 : 400,
+              borderLeft: isActive ? "2px solid var(--accent)" : "2px solid transparent",
+            })}>
+            <span>{icon}</span>{label}
+          </NavLink>
+        ))}
+      </nav>
+      <div style={{ padding: "1rem 1.25rem", borderTop: "1px solid var(--border)" }}>
+        <div style={{ marginBottom: "0.75rem" }}>
+          <div style={{ fontSize: "0.88rem", color: "var(--text)", fontWeight: 500 }}>{user?.nom}</div>
+          <div style={{ fontSize: "0.75rem", marginTop: 2, color: user?.role === "admin" ? "var(--accent)" : "var(--etudier)" }}>
+            {user?.role === "admin" ? "Administrateur" : "Commercial"}
+          </div>
         </div>
-        <nav className="sidebar-nav">
-          {nav.map(n => (
-            <NavLink
-              key={n.to}
-              to={n.to}
-              end={n.to === '/'}
-              className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
-            >
-              <span className="sidebar-icon">{n.icon}</span>
-              {n.label}
-            </NavLink>
-          ))}
-        </nav>
-        <div className="sidebar-footer">v2.0 · piter.at</div>
-      </aside>
-    </>
-  )
+        <button onClick={handleLogout}
+          style={{ width: "100%", padding: "0.5rem", background: "transparent", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text-muted)", cursor: "pointer", fontSize: "0.85rem" }}>
+          Se déconnecter
+        </button>
+      </div>
+    </aside>
+  );
 }

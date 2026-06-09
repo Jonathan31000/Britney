@@ -1,81 +1,79 @@
 """
-scraper/scheduler.py
-Lance le scraping + scoring automatiquement selon une planification.
+scraper/scheduler.py — Lancement automatique scraping + scoring multi-user
 """
 import logging
 import time
-from apscheduler.schedulers.background import BackgroundScheduler
+
+from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from .piter_scraper import run_scraper
-from .ai_scorer import run_scorer
-from .database import init_db
+from scraper.ai_scorer import run_scorer_all_users
+from scraper.database import insert_log
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("scheduler")
 
 
-def pipeline():
-    """Pipeline complet : scrape → score."""
-    logger.info("=== Démarrage du pipeline ===")
+def job_scrape():
+    """Scraping piter.at — une fois, partagé pour tous les users."""
     try:
+        from scraper.piter_scraper import run_scraper
         result = run_scraper()
-        logger.info(f"Scraping terminé : {result}")
+        insert_log("piter.at", "scrape_done", str(result))
+        logger.info(f"[SCRAPE] {result}")
     except Exception as e:
-        logger.error(f"Erreur scraping : {e}")
+        insert_log("piter.at", "scrape_error", str(e))
+        logger.error(f"[SCRAPE] Erreur : {e}")
 
+
+def job_score():
+    """Scoring pour tous les commerciaux actifs."""
     try:
-        result = run_scorer()
-        logger.info(f"Scoring terminé : {result}")
+        results = run_scorer_all_users()
+        insert_log("scorer", "run_done", str(results))
+        logger.info(f"[SCORE] {results}")
     except Exception as e:
-        logger.error(f"Erreur scoring : {e}")
-    logger.info("=== Pipeline terminé ===")
-
-
-def start_scheduler():
-    """Démarre le scheduler en arrière-plan."""
-    init_db()
-
-    scheduler = BackgroundScheduler()
-
-    # Scraping toutes les heures de 8h à 20h, du lundi au vendredi
-    scheduler.add_job(
-        pipeline,
-        CronTrigger(day_of_week="mon-fri", hour="8-20", minute=0),
-        id="pipeline_horaire",
-        name="Pipeline scraping + scoring",
-        replace_existing=True,
-    )
-
-    # Un passage complet le matin à 7h30
-    scheduler.add_job(
-        pipeline,
-        CronTrigger(day_of_week="mon-fri", hour=7, minute=30),
-        id="pipeline_matin",
-        name="Pipeline matin",
-        replace_existing=True,
-    )
-
-    scheduler.start()
-    logger.info("Scheduler démarré — pipeline toutes les heures (lun-ven 8h-20h)")
-    return scheduler
+        insert_log("scorer", "score_error", str(e))
+        logger.error(f"[SCORE] Erreur : {e}")
 
 
 if __name__ == "__main__":
-    # Lancement manuel : python -m scraper.scheduler
-    scheduler = start_scheduler()
+    scheduler = BlockingScheduler(timezone="Europe/Paris")
 
-    # Premier passage immédiat
-    logger.info("Premier passage immédiat...")
-    pipeline()
+    # Scraping toutes les heures en semaine, 8h-20h
+    scheduler.add_job(
+        job_scrape,
+        CronTrigger(day_of_week="mon-fri", hour="8-20", minute=0),
+        id="scrape_hourly",
+        name="Scraping piter.at (toutes les heures)",
+    )
 
+    # Scraping complet le matin à 7h30
+    scheduler.add_job(
+        job_scrape,
+        CronTrigger(day_of_week="mon-fri", hour=7, minute=30),
+        id="scrape_morning",
+        name="Scraping piter.at (matin)",
+    )
+
+    # Scoring pour tous les commerciaux — 30 minutes après chaque scraping
+    scheduler.add_job(
+        job_score,
+        CronTrigger(day_of_week="mon-fri", hour="8-20", minute=30),
+        id="score_hourly",
+        name="Scoring IA tous les commerciaux",
+    )
+
+    # Scoring matin — 8h00
+    scheduler.add_job(
+        job_score,
+        CronTrigger(day_of_week="mon-fri", hour=8, minute=0),
+        id="score_morning",
+        name="Scoring IA matin",
+    )
+
+    logger.info("Scheduler démarré. Ctrl+C pour arrêter.")
     try:
-        while True:
-            time.sleep(60)
+        scheduler.start()
     except KeyboardInterrupt:
-        scheduler.shutdown()
         logger.info("Scheduler arrêté.")

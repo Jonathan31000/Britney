@@ -1,26 +1,46 @@
 """
-api/main.py
-API REST FastAPI — expose les offres au dashboard React.
+api/main.py — API REST AO Veille (multi-utilisateurs)
 """
-import os
+import csv
+import io
 import json
-import sqlite3
-from typing import Optional, List, Any
+import os
+import secrets
 from datetime import datetime
+from typing import Optional
 
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from dotenv import load_dotenv
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, EmailStr
 
-load_dotenv()
-DB_PATH = os.getenv("DB_PATH", "./data/offres.db")
-
-app = FastAPI(
-    title="AO Veille API",
-    description="API de veille des appels d'offres",
-    version="2.0.0",
+from api.auth import (
+    create_access_token,
+    get_current_user,
+    hash_password,
+    require_admin,
+    verify_password,
 )
+from scraper.database import (
+    deactivate_user,
+    get_all_user_config,
+    get_logs,
+    get_offre_by_id,
+    get_offres,
+    get_stats,
+    get_user_by_email,
+    get_user_by_id,
+    create_user,
+    insert_log,
+    list_users,
+    reset_user_config,
+    set_offre_action,
+    set_user_config,
+    update_user,
+    update_last_login,
+)
+
+app = FastAPI(title="AO Veille API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -31,323 +51,357 @@ app.add_middleware(
 )
 
 
-# ---------------------------------------------------------------------------
-# Helpers DB
-# ---------------------------------------------------------------------------
-
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def row_to_dict(row) -> dict:
-    d = dict(row)
-    for field in ["points_forts", "points_faibles"]:
-        if d.get(field):
-            try:
-                d[field] = json.loads(d[field])
-            except Exception:
-                d[field] = []
-    return d
-
-
-# ---------------------------------------------------------------------------
-# Modèles Pydantic
-# ---------------------------------------------------------------------------
-
-class OffreOut(BaseModel):
-    id: int
-    source: str
-    titre: str
-    description: Optional[str]
-    acheteur: Optional[str]
-    budget_min: Optional[float]
-    budget_max: Optional[float]
-    date_limite: Optional[str]
-    date_pub: Optional[str]
-    url: Optional[str]
-    statut: str
-    created_at: str
-    score: Optional[float] = None
-    resume: Optional[str] = None
-    points_forts: Optional[List[str]] = None
-    points_faibles: Optional[List[str]] = None
-    recommandation: Optional[str] = None
-
-
-class StatsOut(BaseModel):
-    total: int
-    nouvelles: int
-    filtre_ok: int
-    scored: int
-    go: int
-    no_go: int
-    a_etudier: int
-    sources: dict
-
-
-class TriggerOut(BaseModel):
-    status: str
-    message: str
-
-
-class ConfigValueIn(BaseModel):
-    value: Any
-
-
-class ConfigBulkIn(BaseModel):
-    # clé libre → valeur quelconque
-    model_config = {"extra": "allow"}
-
-
-# ---------------------------------------------------------------------------
-# Routes — health
-# ---------------------------------------------------------------------------
-
-@app.get("/", tags=["health"])
+# ===========================================================================
+# Health check
+# ===========================================================================
+@app.get("/")
 def health():
-    return {"status": "ok", "timestamp": datetime.now().isoformat()}
+    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
 
 
-# ---------------------------------------------------------------------------
-# Routes — offres
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Auth
+# ===========================================================================
+class LoginRequest(BaseModel):
+    email: str
+    password: str
 
-@app.get("/api/offres", response_model=List[OffreOut], tags=["offres"])
-def list_offres(
-    source: Optional[str]         = Query(None),
-    statut: Optional[str]         = Query(None),
-    recommandation: Optional[str] = Query(None),
-    search: Optional[str]         = Query(None),
-    score_min: Optional[float]    = Query(None),
-    limit: int                    = Query(50, ge=1, le=200),
-    offset: int                   = Query(0, ge=0),
+
+@app.post("/api/auth/login")
+def login(req: LoginRequest):
+    user = get_user_by_email(req.email)
+    if not user or not user["actif"]:
+        raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
+    if not verify_password(req.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
+
+    update_last_login(user["id"])
+    token = create_access_token(user["id"], user["role"], user["nom"])
+    insert_log("auth", "login_ok", json.dumps({"email": req.email}), user_id=user["id"])
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "role": user["role"],
+        "nom": user["nom"],
+        "user_id": user["id"],
+    }
+
+
+@app.post("/api/auth/logout")
+def logout(current_user: dict = Depends(get_current_user)):
+    insert_log("auth", "logout", "", user_id=current_user["id"])
+    return {"status": "ok"}
+
+
+@app.get("/api/auth/me")
+def me(current_user: dict = Depends(get_current_user)):
+    return {
+        "id": current_user["id"],
+        "email": current_user["email"],
+        "nom": current_user["nom"],
+        "role": current_user["role"],
+        "last_login": current_user.get("last_login"),
+    }
+
+
+@app.put("/api/auth/password")
+def change_password(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
 ):
-    conn = get_db()
-    try:
-        where = ["1=1"]
-        params = []
-
-        if source:
-            where.append("o.source = ?")
-            params.append(source)
-        if statut:
-            where.append("o.statut = ?")
-            params.append(statut)
-        if recommandation:
-            where.append("s.recommandation = ?")
-            params.append(recommandation)
-        if search:
-            where.append("(o.titre LIKE ? OR o.description LIKE ? OR o.acheteur LIKE ?)")
-            like = f"%{search}%"
-            params.extend([like, like, like])
-        if score_min is not None:
-            where.append("s.score >= ?")
-            params.append(score_min)
-
-        sql = f"""
-            SELECT o.*,
-                   s.score, s.resume, s.points_forts, s.points_faibles, s.recommandation
-            FROM offres o
-            LEFT JOIN scores s ON s.offre_id = o.id
-            WHERE {' AND '.join(where)}
-            ORDER BY COALESCE(s.score, 0) DESC, o.created_at DESC
-            LIMIT ? OFFSET ?
-        """
-        params.extend([limit, offset])
-        rows = conn.execute(sql, params).fetchall()
-        return [row_to_dict(r) for r in rows]
-    finally:
-        conn.close()
+    old_pw = body.get("old_password", "")
+    new_pw = body.get("new_password", "")
+    if not verify_password(old_pw, current_user["password_hash"]):
+        raise HTTPException(status_code=400, detail="Ancien mot de passe incorrect")
+    if len(new_pw) < 6:
+        raise HTTPException(status_code=400, detail="Mot de passe trop court (6 caractères min)")
+    update_user(current_user["id"], password_hash=hash_password(new_pw))
+    return {"status": "ok"}
 
 
-@app.get("/api/offres/{offre_id}", response_model=OffreOut, tags=["offres"])
-def get_offre(offre_id: int):
-    conn = get_db()
-    try:
-        row = conn.execute("""
-            SELECT o.*, s.score, s.resume, s.points_forts, s.points_faibles, s.recommandation
-            FROM offres o
-            LEFT JOIN scores s ON s.offre_id = o.id
-            WHERE o.id = ?
-        """, (offre_id,)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Offre non trouvée")
-        return row_to_dict(row)
-    finally:
-        conn.close()
+# ===========================================================================
+# Admin — Gestion des utilisateurs
+# ===========================================================================
+@app.get("/api/admin/users")
+def admin_list_users(admin: dict = Depends(require_admin)):
+    return list_users()
 
 
-# ---------------------------------------------------------------------------
-# Routes — stats & logs
-# ---------------------------------------------------------------------------
-
-@app.get("/api/stats", response_model=StatsOut, tags=["stats"])
-def get_stats():
-    conn = get_db()
-    try:
-        def count(sql, params=()):
-            return conn.execute(sql, params).fetchone()[0] or 0
-
-        total     = count("SELECT COUNT(*) FROM offres")
-        nouvelles = count("SELECT COUNT(*) FROM offres WHERE statut='nouveau'")
-        filtre_ok = count("SELECT COUNT(*) FROM offres WHERE statut IN ('filtre_ok','scored')")
-        scored    = count("SELECT COUNT(*) FROM offres WHERE statut='scored'")
-        go        = count("SELECT COUNT(*) FROM scores WHERE recommandation='go'")
-        no_go     = count("SELECT COUNT(*) FROM scores WHERE recommandation='no_go'")
-        a_etudier = count("SELECT COUNT(*) FROM scores WHERE recommandation='a_etudier'")
-
-        sources_rows = conn.execute(
-            "SELECT source, COUNT(*) as n FROM offres GROUP BY source"
-        ).fetchall()
-        sources = {r["source"]: r["n"] for r in sources_rows}
-
-        return StatsOut(
-            total=total, nouvelles=nouvelles, filtre_ok=filtre_ok,
-            scored=scored, go=go, no_go=no_go, a_etudier=a_etudier,
-            sources=sources,
-        )
-    finally:
-        conn.close()
+class CreateUserRequest(BaseModel):
+    email: str
+    nom: str
+    role: str = "commercial"
+    password: str
 
 
-@app.get("/api/logs", tags=["logs"])
-def get_logs(limit: int = Query(50, ge=1, le=500)):
-    conn = get_db()
-    try:
-        rows = conn.execute(
-            "SELECT * FROM logs ORDER BY created_at DESC LIMIT ?", (limit,)
-        ).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
+@app.post("/api/admin/users", status_code=201)
+def admin_create_user(req: CreateUserRequest, admin: dict = Depends(require_admin)):
+    if req.role not in ("admin", "commercial"):
+        raise HTTPException(status_code=422, detail="Rôle invalide (admin ou commercial)")
+    existing = get_user_by_email(req.email)
+    if existing:
+        raise HTTPException(status_code=409, detail="Email déjà utilisé")
+    user = create_user(req.email, req.nom, req.role, req.password)
+    insert_log("admin", "user_created",
+               json.dumps({"email": req.email, "role": req.role}),
+               user_id=admin["id"])
+    return {k: user[k] for k in ("id", "email", "nom", "role", "actif", "created_at")}
 
 
-# ---------------------------------------------------------------------------
-# Routes — config (V2)
-# ---------------------------------------------------------------------------
+@app.put("/api/admin/users/{user_id}")
+def admin_update_user(user_id: int, body: dict, admin: dict = Depends(require_admin)):
+    user = get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
 
-@app.get("/api/config", tags=["config"])
-def get_config_all():
-    """Retourne tous les paramètres regroupés par section."""
-    import sys, os as _os
-    sys.path.insert(0, _os.path.dirname(_os.path.dirname(__file__)))
-    from scraper.database import get_all_config
-    return get_all_config()
+    allowed = {}
+    if "nom" in body:
+        allowed["nom"] = body["nom"]
+    if "email" in body:
+        allowed["email"] = body["email"]
+    if "role" in body and body["role"] in ("admin", "commercial"):
+        allowed["role"] = body["role"]
+    if "actif" in body:
+        allowed["actif"] = int(bool(body["actif"]))
 
-
-@app.put("/api/config/{key}", tags=["config"])
-def update_config_one(key: str, body: ConfigValueIn):
-    """Met à jour un seul paramètre."""
-    import sys, os as _os
-    sys.path.insert(0, _os.path.dirname(_os.path.dirname(__file__)))
-    from scraper.database import set_config
-    try:
-        set_config(key, body.value)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"Clé inconnue : '{key}'")
-    return {"status": "ok", "key": key, "updated_at": datetime.now().isoformat()}
+    update_user(user_id, **allowed)
+    insert_log("admin", "user_updated",
+               json.dumps({"user_id": user_id, "fields": list(allowed.keys())}),
+               user_id=admin["id"])
+    return {"status": "ok"}
 
 
-@app.put("/api/config", tags=["config"])
-def update_config_bulk(body: dict):
-    """Met à jour plusieurs paramètres en une seule requête."""
-    import sys, os as _os
-    sys.path.insert(0, _os.path.dirname(_os.path.dirname(__file__)))
-    from scraper.database import set_config
+@app.delete("/api/admin/users/{user_id}")
+def admin_deactivate_user(user_id: int, admin: dict = Depends(require_admin)):
+    if user_id == admin["id"]:
+        raise HTTPException(status_code=400, detail="Vous ne pouvez pas désactiver votre propre compte")
+    user = get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    deactivate_user(user_id)
+    insert_log("admin", "user_deactivated", json.dumps({"user_id": user_id}), user_id=admin["id"])
+    return {"status": "ok"}
+
+
+@app.post("/api/admin/users/{user_id}/reset-password")
+def admin_reset_password(user_id: int, admin: dict = Depends(require_admin)):
+    user = get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    tmp_password = secrets.token_urlsafe(8)
+    update_user(user_id, password_hash=hash_password(tmp_password))
+    insert_log("admin", "password_reset", json.dumps({"user_id": user_id}), user_id=admin["id"])
+    return {"status": "ok", "temporary_password": tmp_password}
+
+
+# ===========================================================================
+# Config utilisateur
+# ===========================================================================
+@app.get("/api/config")
+def get_config(current_user: dict = Depends(get_current_user)):
+    return get_all_user_config(current_user["id"])
+
+
+@app.put("/api/config")
+def update_config(body: dict, current_user: dict = Depends(get_current_user)):
+    VALID_KEYS = {
+        "keywords_include", "keywords_exclude", "budget_min", "budget_max",
+        "min_days_remaining", "ai_score_threshold", "company_context",
+        "prompt_template", "score_go_threshold", "score_etudier_threshold",
+    }
     updated = []
-    errors = []
     for key, value in body.items():
-        try:
-            set_config(key, value)
+        if key in VALID_KEYS:
+            set_user_config(current_user["id"], key, value)
             updated.append(key)
-        except KeyError:
-            errors.append(key)
-    if errors:
-        raise HTTPException(status_code=404, detail=f"Clés inconnues : {errors}")
     return {"status": "ok", "updated": updated}
 
 
-@app.post("/api/config/reset", tags=["config"])
-def reset_config_all():
-    """Remet tous les paramètres à leurs valeurs par défaut."""
-    import sys, os as _os
-    sys.path.insert(0, _os.path.dirname(_os.path.dirname(__file__)))
-    from scraper.database import reset_config, CONFIG_DEFAULTS
-    reset_config()
-    return {"status": "ok", "message": f"{len(CONFIG_DEFAULTS)} paramètres réinitialisés"}
+@app.put("/api/config/{key}")
+def update_config_key(key: str, body: dict, current_user: dict = Depends(get_current_user)):
+    VALID_KEYS = {
+        "keywords_include", "keywords_exclude", "budget_min", "budget_max",
+        "min_days_remaining", "ai_score_threshold", "company_context",
+        "prompt_template", "score_go_threshold", "score_etudier_threshold",
+    }
+    if key not in VALID_KEYS:
+        raise HTTPException(status_code=404, detail="Clé de configuration inconnue")
+    set_user_config(current_user["id"], key, body.get("value"))
+    return {"status": "ok", "key": key, "updated_at": datetime.utcnow().isoformat()}
 
 
-# ---------------------------------------------------------------------------
-# Routes — actions
-# ---------------------------------------------------------------------------
+@app.post("/api/config/reset")
+def reset_config(current_user: dict = Depends(get_current_user)):
+    reset_user_config(current_user["id"])
+    return {"status": "ok", "message": "Configuration réinitialisée aux valeurs par défaut"}
 
-@app.post("/api/trigger/scrape", response_model=TriggerOut, tags=["actions"])
-def trigger_scrape():
+
+# Admin : lire/modifier la config d'un autre utilisateur
+@app.get("/api/admin/users/{user_id}/config")
+def admin_get_user_config(user_id: int, admin: dict = Depends(require_admin)):
+    user = get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    return get_all_user_config(user_id)
+
+
+@app.put("/api/admin/users/{user_id}/config")
+def admin_update_user_config(user_id: int, body: dict, admin: dict = Depends(require_admin)):
+    user = get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    updated = []
+    for key, value in body.items():
+        set_user_config(user_id, key, value)
+        updated.append(key)
+    return {"status": "ok", "updated": updated}
+
+
+# ===========================================================================
+# Offres
+# ===========================================================================
+@app.get("/api/offres")
+def list_offres(
+    source: Optional[str] = None,
+    recommandation: Optional[str] = None,
+    search: Optional[str] = None,
+    score_min: Optional[float] = None,
+    limit: int = Query(default=50, le=200),
+    offset: int = 0,
+    user_id_filter: Optional[int] = None,  # admin seulement
+    current_user: dict = Depends(get_current_user),
+):
+    is_admin = current_user["role"] == "admin"
+    filter_uid = user_id_filter if is_admin else None
+
+    return get_offres(
+        user_id=current_user["id"],
+        source=source,
+        recommandation=recommandation,
+        search=search,
+        score_min=score_min,
+        limit=limit,
+        offset=offset,
+        is_admin=is_admin,
+        filter_user_id=filter_uid,
+    )
+
+
+@app.get("/api/offres/{offre_id}")
+def detail_offre(offre_id: int, current_user: dict = Depends(get_current_user)):
+    offre = get_offre_by_id(offre_id, current_user["id"])
+    if not offre:
+        raise HTTPException(status_code=404, detail="Offre introuvable")
+    return offre
+
+
+@app.put("/api/offres/{offre_id}/action")
+def set_action(
+    offre_id: int,
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+):
+    action = body.get("action")
+    if action not in ("ignore", "repondu", "gagne", "perdu", None):
+        raise HTTPException(status_code=422, detail="Action invalide")
+    set_offre_action(offre_id, current_user["id"], action, body.get("note"))
+    return {"status": "ok"}
+
+
+# ===========================================================================
+# Stats
+# ===========================================================================
+@app.get("/api/stats")
+def stats(
+    user_id_filter: Optional[int] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    is_admin = current_user["role"] == "admin"
+    uid = current_user["id"]
+
+    if is_admin and user_id_filter:
+        return get_stats(user_id_filter, is_admin=False)
+    return get_stats(uid, is_admin=is_admin)
+
+
+# ===========================================================================
+# Logs
+# ===========================================================================
+@app.get("/api/logs")
+def logs(
+    limit: int = 50,
+    current_user: dict = Depends(get_current_user),
+):
+    is_admin = current_user["role"] == "admin"
+    uid = None if is_admin else current_user["id"]
+    return get_logs(limit=limit, user_id=uid)
+
+
+# ===========================================================================
+# Triggers manuels
+# ===========================================================================
+@app.post("/api/trigger/scrape")
+def trigger_scrape(admin: dict = Depends(require_admin)):
+    """Scraping manuel — admin uniquement."""
     try:
-        import sys
-        sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
         from scraper.piter_scraper import run_scraper
         result = run_scraper()
-        return TriggerOut(status="ok", message=str(result))
+        insert_log("piter.at", "scrape_done", json.dumps(result), user_id=admin["id"])
+        return {"status": "ok", "message": str(result)}
     except Exception as e:
-        return TriggerOut(status="error", message=str(e))
+        insert_log("piter.at", "scrape_error", str(e), user_id=admin["id"])
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/trigger/score", response_model=TriggerOut, tags=["actions"])
-def trigger_score():
+@app.post("/api/trigger/score")
+def trigger_score(current_user: dict = Depends(get_current_user)):
+    """Scoring pour l'utilisateur connecté (ou tous si admin sans paramètre)."""
     try:
-        import sys
-        sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-        from scraper.ai_scorer import run_scorer
-        result = run_scorer()
-        return TriggerOut(status="ok", message=str(result))
+        from scraper.ai_scorer import run_scorer, run_scorer_all_users
+        is_admin = current_user["role"] == "admin"
+
+        if is_admin:
+            result = run_scorer_all_users()
+        else:
+            result = run_scorer(current_user["id"])
+
+        return {"status": "ok", "message": str(result)}
     except Exception as e:
-        return TriggerOut(status="error", message=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# ---------------------------------------------------------------------------
-# Routes — export
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Export CSV
+# ===========================================================================
+@app.get("/api/export/csv")
+def export_csv(current_user: dict = Depends(get_current_user)):
+    is_admin = current_user["role"] == "admin"
+    offres = get_offres(
+        user_id=current_user["id"],
+        limit=5000,
+        is_admin=is_admin,
+    )
 
-@app.get("/api/export/csv", tags=["export"])
-def export_csv():
-    import csv
-    import io
-    from fastapi.responses import StreamingResponse
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Titre", "Acheteur", "Budget min", "Budget max",
+        "Date limite", "URL", "Source",
+        "Score IA", "Recommandation", "Résumé", "Action",
+    ])
+    for o in offres:
+        writer.writerow([
+            o.get("titre"), o.get("acheteur"),
+            o.get("budget_min"), o.get("budget_max"),
+            o.get("date_limite"), o.get("url"), o.get("source"),
+            o.get("score"), o.get("recommandation"), o.get("resume"),
+            o.get("action"),
+        ])
 
-    conn = get_db()
-    try:
-        rows = conn.execute("""
-            SELECT o.titre, o.acheteur, o.budget_min, o.budget_max,
-                   o.date_limite, o.url, o.source,
-                   s.score, s.recommandation, s.resume
-            FROM offres o
-            LEFT JOIN scores s ON s.offre_id = o.id
-            WHERE o.statut = 'scored'
-            ORDER BY s.score DESC
-        """).fetchall()
-
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(["Titre", "Acheteur", "Budget min", "Budget max",
-                         "Date limite", "URL", "Source", "Score IA",
-                         "Recommandation", "Résumé"])
-        for r in rows:
-            writer.writerow(list(r))
-
-        output.seek(0)
-        return StreamingResponse(
-            iter([output.getvalue()]),
-            media_type="text/csv",
-            headers={"Content-Disposition": "attachment; filename=offres.csv"},
-        )
-    finally:
-        conn.close()
-
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("API_PORT", 8000))
-    uvicorn.run("api.main:app", host="0.0.0.0", port=port, reload=True)
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=offres.csv"},
+    )

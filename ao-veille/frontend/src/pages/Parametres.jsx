@@ -1,5 +1,6 @@
 // src/pages/Parametres.jsx
 import React, { useState, useEffect, useCallback } from 'react'
+import { useAuth } from '../hooks/useAuth'
 
 const API = '/api'
 
@@ -7,13 +8,11 @@ const css = `
   .params-page { padding: 32px 40px; max-width: 820px; }
   .params-title { font-size: 22px; color: var(--text); margin-bottom: 8px; }
   .params-subtitle { font-size: 13px; color: var(--text3); margin-bottom: 32px; }
-
   .params-section { background: var(--bg2); border: 1px solid var(--border);
     border-radius: 10px; padding: 28px; margin-bottom: 24px; }
   .params-section-title { font-size: 15px; font-weight: 600; color: var(--text);
     margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }
   .params-section-icon { font-size: 18px; }
-
   .params-field { margin-bottom: 20px; }
   .params-label { font-size: 12px; color: var(--text3); text-transform: uppercase;
     letter-spacing: .05em; margin-bottom: 8px; }
@@ -23,10 +22,8 @@ const css = `
   .params-input:focus { outline: none; border-color: var(--accent); }
   .params-textarea { resize: vertical; min-height: 100px; }
   .params-textarea-lg { min-height: 220px; font-family: var(--font-mono); font-size: 12px; }
-
   .params-row { display: flex; gap: 16px; }
   .params-row .params-field { flex: 1; }
-
   .tags-container { display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
     background: var(--bg3); border: 1px solid var(--border); border-radius: 6px;
     padding: 8px 10px; min-height: 40px; }
@@ -37,7 +34,6 @@ const css = `
   .tag-remove:hover { color: var(--no-go); }
   .tag-input { background: transparent; border: none; outline: none; color: var(--text);
     font-size: 12px; min-width: 80px; flex: 1; font-family: inherit; }
-
   .seuils-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .seuil-group { display: flex; align-items: center; gap: 8px; }
   .seuil-label { font-size: 13px; color: var(--text2); white-space: nowrap; }
@@ -45,12 +41,10 @@ const css = `
     border-radius: 6px; color: var(--text); font-size: 13px; padding: 6px 10px;
     width: 70px; text-align: center; font-family: inherit; }
   .seuil-input:focus { outline: none; border-color: var(--accent); }
-
   .advanced-toggle { background: none; border: none; color: var(--text3);
     font-size: 12px; cursor: pointer; padding: 0; display: flex; align-items: center;
     gap: 4px; margin-bottom: 12px; }
   .advanced-toggle:hover { color: var(--text); }
-
   .params-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
   .btn { border: none; border-radius: 6px; padding: 9px 20px; font-size: 13px;
     cursor: pointer; font-family: inherit; font-weight: 500; transition: opacity .15s; }
@@ -59,29 +53,24 @@ const css = `
   .btn-primary { background: var(--accent); color: #fff; }
   .btn-ghost { background: var(--bg3); color: var(--text2); border: 1px solid var(--border); }
   .btn-danger { background: transparent; color: var(--no-go); border: 1px solid var(--no-go); }
-
   .toast { position: fixed; bottom: 28px; right: 28px; background: var(--bg2);
     border: 1px solid var(--border); border-radius: 8px; padding: 12px 20px;
     font-size: 13px; color: var(--text); box-shadow: 0 4px 20px rgba(0,0,0,.4);
     z-index: 1000; display: flex; align-items: center; gap: 8px; }
   .toast-ok  { border-left: 3px solid var(--go); }
   .toast-err { border-left: 3px solid var(--no-go); }
-
   .loading { color: var(--text3); font-size: 13px; padding: 40px; text-align: center; }
   .hint { font-size: 11px; color: var(--text3); margin-top: 6px; }
 `
 
 function TagInput({ values, onChange }) {
   const [input, setInput] = useState('')
-
   const add = () => {
     const v = input.trim().toLowerCase()
     if (v && !values.includes(v)) onChange([...values, v])
     setInput('')
   }
-
   const remove = (kw) => onChange(values.filter(k => k !== kw))
-
   return (
     <div className="tags-container">
       {values.map(kw => (
@@ -116,6 +105,7 @@ function Toast({ msg, onClose }) {
 }
 
 export default function Parametres() {
+  const { token } = useAuth()
   const [loading, setLoading]       = useState(true)
   const [saving, setSaving]         = useState(false)
   const [toast, setToast]           = useState(null)
@@ -136,10 +126,15 @@ export default function Parametres() {
     score_etudier_threshold: '5.0',
   })
 
+  const authHeaders = {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  }
+
   const fetchConfig = useCallback(async () => {
     setLoading(true)
     try {
-      const res  = await fetch(`${API}/config`)
+      const res  = await fetch(`${API}/config`, { headers: authHeaders })
       const data = await res.json()
       const f = data.filtrage || {}
       const s = data.scoring  || {}
@@ -162,7 +157,7 @@ export default function Parametres() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [token])
 
   useEffect(() => { fetchConfig() }, [fetchConfig])
 
@@ -183,7 +178,7 @@ export default function Parametres() {
       }
       const res = await fetch(`${API}/config`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders,
         body: JSON.stringify(payload),
       })
       if (!res.ok) throw new Error(await res.text())
@@ -198,7 +193,7 @@ export default function Parametres() {
   const handleReset = async () => {
     if (!window.confirm('Remettre tous les paramètres à leurs valeurs par défaut ?')) return
     try {
-      const res = await fetch(`${API}/config/reset`, { method: 'POST' })
+      const res = await fetch(`${API}/config/reset`, { method: 'POST', headers: authHeaders })
       if (!res.ok) throw new Error()
       setToast({ ok: true, text: 'Paramètres réinitialisés' })
       await fetchConfig()
@@ -218,76 +213,58 @@ export default function Parametres() {
           Les modifications sont actives dès le prochain scraping ou scoring — aucun redémarrage nécessaire.
         </div>
 
-        {/* Filtrage */}
         <div className="params-section">
           <div className="params-section-title">
             <span className="params-section-icon">⧖</span> Filtrage des offres
           </div>
-
           <div className="params-field">
             <div className="params-label">Mots-clés obligatoires</div>
-            <TagInput
-              values={filtrage.keywords_include}
-              onChange={v => setFiltrage(f => ({ ...f, keywords_include: v }))}
-            />
-            <div className="hint">Au moins un doit être présent dans le titre ou la description. Entrée ou virgule pour ajouter.</div>
+            <TagInput values={filtrage.keywords_include} onChange={v => setFiltrage(f => ({ ...f, keywords_include: v }))} />
+            <div className="hint">Au moins un doit être présent dans le titre ou la description.</div>
           </div>
-
           <div className="params-field">
             <div className="params-label">Mots-clés exclus</div>
-            <TagInput
-              values={filtrage.keywords_exclude}
-              onChange={v => setFiltrage(f => ({ ...f, keywords_exclude: v }))}
-            />
+            <TagInput values={filtrage.keywords_exclude} onChange={v => setFiltrage(f => ({ ...f, keywords_exclude: v }))} />
             <div className="hint">Si un de ces mots est trouvé, l'offre est rejetée immédiatement.</div>
           </div>
-
           <div className="params-row">
             <div className="params-field">
               <div className="params-label">TJM minimum (€)</div>
               <input className="params-input" type="number" placeholder="vide = pas de filtre"
-                value={filtrage.budget_min}
-                onChange={e => setFiltrage(f => ({ ...f, budget_min: e.target.value }))} />
+                value={filtrage.budget_min} onChange={e => setFiltrage(f => ({ ...f, budget_min: e.target.value }))} />
             </div>
             <div className="params-field">
               <div className="params-label">TJM maximum (€)</div>
               <input className="params-input" type="number" placeholder="vide = pas de filtre"
-                value={filtrage.budget_max}
-                onChange={e => setFiltrage(f => ({ ...f, budget_max: e.target.value }))} />
+                value={filtrage.budget_max} onChange={e => setFiltrage(f => ({ ...f, budget_max: e.target.value }))} />
             </div>
           </div>
-
           <div className="params-row">
             <div className="params-field">
               <div className="params-label">Délai minimum avant date limite (jours)</div>
               <input className="params-input" type="number" min="0"
-                value={filtrage.min_days_remaining}
-                onChange={e => setFiltrage(f => ({ ...f, min_days_remaining: e.target.value }))} />
+                value={filtrage.min_days_remaining} onChange={e => setFiltrage(f => ({ ...f, min_days_remaining: e.target.value }))} />
             </div>
             <div className="params-field">
               <div className="params-label">Score IA minimum affiché</div>
               <input className="params-input" type="number" step="0.5" min="0" max="10"
-                value={filtrage.ai_score_threshold}
-                onChange={e => setFiltrage(f => ({ ...f, ai_score_threshold: e.target.value }))} />
+                value={filtrage.ai_score_threshold} onChange={e => setFiltrage(f => ({ ...f, ai_score_threshold: e.target.value }))} />
             </div>
           </div>
         </div>
 
-        {/* Scoring IA */}
         <div className="params-section">
           <div className="params-section-title">
             <span className="params-section-icon">◈</span> Scoring IA
           </div>
-
           <div className="params-field">
             <div className="params-label">Contexte entreprise</div>
             <textarea className="params-input params-textarea"
               value={scoring.company_context}
               onChange={e => setScoring(s => ({ ...s, company_context: e.target.value }))}
               placeholder="Décrivez votre entreprise : spécialités, TJM, zones géographiques…" />
-            <div className="hint">Injecté dans chaque prompt envoyé à Claude. Plus c'est précis, meilleur est le scoring.</div>
+            <div className="hint">Injecté dans chaque prompt envoyé à Claude.</div>
           </div>
-
           <div className="params-field">
             <div className="params-label">Seuils de recommandation</div>
             <div className="seuils-row">
@@ -306,7 +283,6 @@ export default function Parametres() {
               <span className="seuil-label" style={{ color: 'var(--no-go)' }}>🔴 NO GO en dessous</span>
             </div>
           </div>
-
           <div className="params-field">
             <button className="advanced-toggle" onClick={() => setShowPrompt(p => !p)}>
               {showPrompt ? '▾' : '▸'} Template du prompt {showPrompt ? '(masquer)' : '(afficher)'}
@@ -317,7 +293,7 @@ export default function Parametres() {
                   value={scoring.prompt_template}
                   onChange={e => setScoring(s => ({ ...s, prompt_template: e.target.value }))} />
                 <div className="hint">
-                  Variables : {'{company_context}'}, {'{titre}'}, {'{acheteur}'}, {'{budget}'}, {'{date_limite}'}, {'{source}'}, {'{description}'}
+                  Variables : {'{company_context}'}, {'{titre}'}, {'{acheteur}'}, {'{budget}'}, {'{date_limite}'}, {'{description}'}
                 </div>
               </>
             )}
@@ -331,7 +307,6 @@ export default function Parametres() {
           </button>
         </div>
       </div>
-
       <Toast msg={toast} onClose={() => setToast(null)} />
     </>
   )

@@ -1,7 +1,7 @@
 // src/pages/Offres.jsx
-import React, { useState } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { useFetch } from '../hooks/useApi'
+import { useApi } from '../hooks/useApi'
 import { ScoreBadge, RecoBadge } from '../components/ScoreBadge'
 
 const css = `
@@ -47,22 +47,34 @@ function fmtBudget(min, max) {
 }
 
 export default function Offres() {
-  const [search,  setSearch]  = useState('')
-  const [reco,    setReco]    = useState('')
-  const [statut,  setStatut]  = useState('')
-  const [scoreMin,setScoreMin]= useState('')
-  const [page,    setPage]    = useState(0)
+  const { get, downloadCsv } = useApi()
+  const [offres, setOffres] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [search,   setSearch]   = useState('')
+  const [reco,     setReco]     = useState('')
+  const [statut,   setStatut]   = useState('')
+  const [scoreMin, setScoreMin] = useState('')
+  const [page,     setPage]     = useState(0)
   const LIMIT = 25
 
-  const params = new URLSearchParams({
-    limit: LIMIT, offset: page * LIMIT,
-    ...(search   && { search }),
-    ...(reco     && { recommandation: reco }),
-    ...(statut   && { statut }),
-    ...(scoreMin && { score_min: scoreMin }),
-  })
+  const loadOffres = useCallback(async () => {
+    setLoading(true)
+    const params = new URLSearchParams({
+      limit: LIMIT, offset: page * LIMIT,
+      ...(search   && { search }),
+      ...(reco     && { recommandation: reco }),
+      ...(statut   && { statut }),
+      ...(scoreMin && { score_min: scoreMin }),
+    })
+    try {
+      const data = await get(`/api/offres?${params}`)
+      if (data) setOffres(data)
+    } finally {
+      setLoading(false)
+    }
+  }, [get, search, reco, statut, scoreMin, page])
 
-  const { data: offres, loading } = useFetch(`/offres?${params}`, [search, reco, statut, scoreMin, page])
+  useEffect(() => { loadOffres() }, [loadOffres])
 
   function handleSearch(e) { setSearch(e.target.value); setPage(0) }
 
@@ -97,9 +109,7 @@ export default function Offres() {
             <option value="5">5+ ★★</option>
             <option value="2.5">2.5+ ★</option>
           </select>
-          <a href="/api/export/csv" target="_blank">
-            <button className="btn-export">↓ Export CSV</button>
-          </a>
+          <button className="btn-export" onClick={downloadCsv}>↓ Export CSV</button>
         </div>
 
         {loading ? (
@@ -128,7 +138,11 @@ export default function Offres() {
                         {o.acheteur && <div className="td-sub">{o.acheteur}</div>}
                       </td>
                       <td><ScoreBadge score={o.score} /></td>
-                      <td>{o.recommandation ? <RecoBadge reco={o.recommandation} /> : <span style={{color:'var(--text3)'}}>—</span>}</td>
+                      <td>
+                        {o.recommandation
+                          ? <RecoBadge reco={o.recommandation} />
+                          : <span style={{color:'var(--text3)'}}>—</span>}
+                      </td>
                       <td className="td-budget">{fmtBudget(o.budget_min, o.budget_max)}</td>
                       <td className="td-date">{o.date_limite || '—'}</td>
                       <td><span style={{fontSize:11,color:'var(--text3)'}}>{o.source}</span></td>

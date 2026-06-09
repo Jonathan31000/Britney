@@ -1,7 +1,7 @@
 // src/pages/OffreDetail.jsx
-import React from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { useFetch } from '../hooks/useApi'
+import { useApi } from '../hooks/useApi'
 import { ScoreBadge, RecoBadge } from '../components/ScoreBadge'
 
 const css = `
@@ -31,7 +31,6 @@ const css = `
   .pt-fort li::before  { content:'↑'; color:var(--go); }
   .pt-faible li::before { content:'↓'; color:var(--no-go); }
   .resume-text { font-size:14px; line-height:1.7; color:var(--text); font-style:italic; }
-  .justif     { font-size:13px; color:var(--text2); margin-top:8px; }
   .btn-ext { display:inline-flex; align-items:center; gap:8px; background:var(--accent);
     color:#fff; padding:10px 20px; border-radius:var(--r); font-size:13px; cursor:pointer;
     font-family:var(--font-mono); text-decoration:none; }
@@ -47,7 +46,25 @@ function fmtBudget(min, max) {
 
 export default function OffreDetail() {
   const { id } = useParams()
-  const { data: o, loading, error } = useFetch(`/offres/${id}`)
+  const { get } = useApi()
+  const [o, setO] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
+
+  const loadOffre = useCallback(async () => {
+    setLoading(true)
+    try {
+      const data = await get(`/api/offres/${id}`)
+      if (data) setO(data)
+      else setError(true)
+    } catch {
+      setError(true)
+    } finally {
+      setLoading(false)
+    }
+  }, [get, id])
+
+  useEffect(() => { loadOffre() }, [loadOffre])
 
   if (loading) return <div style={{padding:32,color:'var(--text3)'}}>Chargement...</div>
   if (error || !o) return <div style={{padding:32,color:'var(--no-go)'}}>Offre introuvable.</div>
@@ -95,7 +112,6 @@ export default function OffreDetail() {
           </div>
         </div>
 
-        {/* Résumé IA */}
         {o.resume && (
           <div className="section">
             <div className="section-title">Analyse IA</div>
@@ -103,7 +119,6 @@ export default function OffreDetail() {
           </div>
         )}
 
-        {/* Points forts / faibles */}
         {(o.points_forts?.length > 0 || o.points_faibles?.length > 0) && (
           <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:16, marginBottom:16}}>
             {o.points_forts?.length > 0 && (
@@ -121,13 +136,11 @@ export default function OffreDetail() {
           </div>
         )}
 
-        {/* Description complète */}
         <div className="section">
           <div className="section-title">Description complète</div>
           <p className="description">{o.description || 'Aucune description disponible.'}</p>
         </div>
 
-        {/* Lien source */}
         {o.url && (
           <a href={o.url} target="_blank" rel="noreferrer" className="btn-ext">
             ↗ Voir sur {o.source}

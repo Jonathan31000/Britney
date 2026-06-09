@@ -1,6 +1,6 @@
 // src/pages/Logs.jsx
-import React from 'react'
-import { useFetch } from '../hooks/useApi'
+import React, { useState, useEffect, useCallback } from 'react'
+import { useApi } from '../hooks/useApi'
 
 const css = `
   .logs { padding:32px; }
@@ -23,7 +23,21 @@ function eventColor(e) {
 }
 
 export default function Logs() {
-  const { data: logs, loading } = useFetch('/logs?limit=100')
+  const { get } = useApi()
+  const [logs, setLogs] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  const loadLogs = useCallback(async () => {
+    setLoading(true)
+    try {
+      const data = await get('/api/logs?limit=100')
+      if (data) setLogs(data)
+    } finally {
+      setLoading(false)
+    }
+  }, [get])
+
+  useEffect(() => { loadLogs() }, [loadLogs])
 
   return (
     <>
