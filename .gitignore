@@ -1,0 +1,26 @@
+# Environnement Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.Python
+
+# Variables d'environnement (contient les mots de passe)
+.env
+
+# Cookies de session (données sensibles)
+cookies.json
+
+# Base de données (données locales)
+data/*.db
+
+# Logs
+*.log
+/tmp/ao-veille-*.log
+
+# Node.js
+frontend/node_modules/
+frontend/dist/
+
+# macOS
+.DS_Store

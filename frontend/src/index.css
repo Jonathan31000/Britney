@@ -1,0 +1,72 @@
+/* index.css — AO Veille — thème industriel sombre */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:         #0d0f12;
+  --bg2:        #141720;
+  --bg3:        #1c2030;
+  --border:     #2a2f3e;
+  --border2:    #363d52;
+  --text:       #e2e6f0;
+  --text2:      #8892a4;
+  --text3:      #545e72;
+  --accent:     #4f8ef7;
+  --accent2:    #7ab3ff;
+  --go:         #2ecc8a;
+  --no-go:      #e05c6a;
+  --etudier:    #f0a848;
+  --score-high: #2ecc8a;
+  --score-mid:  #f0a848;
+  --score-low:  #e05c6a;
+  --font-head:  'Syne', sans-serif;
+  --font-mono:  'DM Mono', monospace;
+  --r:          6px;
+  --r2:         10px;
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-head);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent2); }
+
+button {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  border: none;
+  border-radius: var(--r);
+  padding: 8px 16px;
+  transition: all .15s;
+}
+
+input, select {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--r);
+  padding: 8px 12px;
+  outline: none;
+  transition: border-color .15s;
+}
+
+input:focus, select:focus { border-color: var(--accent); }
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg2); }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
