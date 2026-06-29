@@ -10,9 +10,6 @@ from typing import Any, Optional
 
 DB_PATH = os.getenv("DB_PATH", "./data/offres.db")
 
-# ---------------------------------------------------------------------------
-# Connexion
-# ---------------------------------------------------------------------------
 @contextmanager
 def get_conn():
     conn = sqlite3.connect(DB_PATH)
@@ -28,9 +25,6 @@ def get_conn():
         conn.close()
 
 
-# ---------------------------------------------------------------------------
-# Init schéma
-# ---------------------------------------------------------------------------
 def _column_exists(conn, table: str, column: str) -> bool:
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return any(r["name"] == column for r in rows)
@@ -47,9 +41,6 @@ def init_db():
     os.makedirs(os.path.dirname(DB_PATH) if os.path.dirname(DB_PATH) else ".", exist_ok=True)
 
     with get_conn() as conn:
-        # ----------------------------------------------------------------
-        # Offres (inchangée)
-        # ----------------------------------------------------------------
         conn.execute("""
         CREATE TABLE IF NOT EXISTS offres (
             id          INTEGER PRIMARY KEY,
@@ -69,9 +60,6 @@ def init_db():
             updated_at  TEXT DEFAULT (datetime('now'))
         )""")
 
-        # ----------------------------------------------------------------
-        # Users
-        # ----------------------------------------------------------------
         conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id            INTEGER PRIMARY KEY,
@@ -85,9 +73,6 @@ def init_db():
             last_login    TEXT
         )""")
 
-        # ----------------------------------------------------------------
-        # user_config
-        # ----------------------------------------------------------------
         conn.execute("""
         CREATE TABLE IF NOT EXISTS user_config (
             id         INTEGER PRIMARY KEY,
@@ -100,15 +85,10 @@ def init_db():
             UNIQUE(user_id, key)
         )""")
 
-        # ----------------------------------------------------------------
-        # Scores — migration douce si la table existe sans user_id
-        # ----------------------------------------------------------------
         if _table_exists(conn, "scores"):
             if not _column_exists(conn, "scores", "user_id"):
                 print("[DB] Migration : ajout colonne user_id dans scores")
                 conn.execute("ALTER TABLE scores ADD COLUMN user_id INTEGER REFERENCES users(id)")
-            # Recréer la contrainte UNIQUE n'est pas possible sur SQLite via ALTER.
-            # On la gère applicativement dans insert_score via ON CONFLICT.
         else:
             conn.execute("""
             CREATE TABLE scores (
@@ -124,9 +104,6 @@ def init_db():
                 UNIQUE(offre_id, user_id)
             )""")
 
-        # ----------------------------------------------------------------
-        # Sessions
-        # ----------------------------------------------------------------
         conn.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             id         INTEGER PRIMARY KEY,
@@ -136,9 +113,6 @@ def init_db():
             created_at TEXT DEFAULT (datetime('now'))
         )""")
 
-        # ----------------------------------------------------------------
-        # Offre actions
-        # ----------------------------------------------------------------
         conn.execute("""
         CREATE TABLE IF NOT EXISTS offre_actions (
             id         INTEGER PRIMARY KEY,
@@ -150,9 +124,6 @@ def init_db():
             UNIQUE(offre_id, user_id)
         )""")
 
-        # ----------------------------------------------------------------
-        # Logs — migration douce si user_id manquant
-        # ----------------------------------------------------------------
         if _table_exists(conn, "logs"):
             if not _column_exists(conn, "logs", "user_id"):
                 print("[DB] Migration : ajout colonne user_id dans logs")
@@ -168,9 +139,60 @@ def init_db():
                 created_at TEXT DEFAULT (datetime('now'))
             )""")
 
-        # ----------------------------------------------------------------
-        # Index — séparés pour ne pas bloquer si déjà existants
-        # ----------------------------------------------------------------
+        if not _table_exists(conn, "sources"):
+            conn.execute("""
+            CREATE TABLE sources (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                name         TEXT UNIQUE NOT NULL,
+                display_name TEXT NOT NULL,
+                base_url     TEXT NOT NULL,
+                list_url     TEXT NOT NULL,
+                auth_type    TEXT DEFAULT 'none',
+                cookies_json TEXT,
+                config_json  TEXT,
+                active       INTEGER DEFAULT 1,
+                confidence   REAL DEFAULT 0.0,
+                last_scraped TEXT,
+                created_at   TEXT DEFAULT (datetime('now'))
+            )""")
+            conn.execute("""
+                INSERT OR IGNORE INTO sources
+                    (name, display_name, base_url, list_url, auth_type, active)
+                VALUES
+                    ('piter.at', 'Piter.at', 'https://piter.at',
+                     'https://piter.at/prestataire/consultation', 'cookies', 1)
+            """)
+
+        if not _table_exists(conn, "tags"):
+            conn.execute("""
+            CREATE TABLE tags (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                offre_id   INTEGER NOT NULL REFERENCES offres(id) ON DELETE CASCADE,
+                user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                label      TEXT NOT NULL,
+                color      TEXT DEFAULT '#4f8ef7',
+                created_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(offre_id, user_id, label)
+            )""")
+
+        if not _table_exists(conn, "saved_searches"):
+            conn.execute("""
+            CREATE TABLE saved_searches (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name       TEXT NOT NULL,
+                filters    TEXT NOT NULL,
+                notify     INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now'))
+            )""")
+
+        if not _column_exists(conn, "offres", "vue_par"):
+            conn.execute("ALTER TABLE offres ADD COLUMN vue_par TEXT DEFAULT '[]'")
+        if not _column_exists(conn, "offres", "score_perso"):
+            conn.execute("ALTER TABLE offres ADD COLUMN score_perso TEXT DEFAULT '{}'")
+        if not _column_exists(conn, "offres", "actions"):
+            conn.execute("ALTER TABLE offres ADD COLUMN actions TEXT DEFAULT '{}'")
+
         for sql in [
             "CREATE INDEX IF NOT EXISTS idx_offres_statut    ON offres(statut)",
             "CREATE INDEX IF NOT EXISTS idx_offres_source    ON offres(source)",
@@ -190,9 +212,65 @@ def init_db():
     print(f"[DB] Base initialisée : {DB_PATH}")
 
 
-# ---------------------------------------------------------------------------
-# Valeurs par défaut de config
-# ---------------------------------------------------------------------------
+def migrate_v3():
+    with get_conn() as conn:
+        if not _table_exists(conn, "sources"):
+            conn.execute("""
+            CREATE TABLE sources (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                name         TEXT UNIQUE NOT NULL,
+                display_name TEXT NOT NULL,
+                base_url     TEXT NOT NULL,
+                list_url     TEXT NOT NULL,
+                auth_type    TEXT DEFAULT 'none',
+                cookies_json TEXT,
+                config_json  TEXT,
+                active       INTEGER DEFAULT 1,
+                confidence   REAL DEFAULT 0.0,
+                last_scraped TEXT,
+                created_at   TEXT DEFAULT (datetime('now'))
+            )""")
+            conn.execute("""
+                INSERT OR IGNORE INTO sources
+                    (name, display_name, base_url, list_url, auth_type, active)
+                VALUES
+                    ('piter.at', 'Piter.at', 'https://piter.at',
+                     'https://piter.at/prestataire/consultation', 'cookies', 1)
+            """)
+
+        if not _table_exists(conn, "tags"):
+            conn.execute("""
+            CREATE TABLE tags (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                offre_id   INTEGER NOT NULL REFERENCES offres(id) ON DELETE CASCADE,
+                user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                label      TEXT NOT NULL,
+                color      TEXT DEFAULT '#4f8ef7',
+                created_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(offre_id, user_id, label)
+            )""")
+
+        if not _table_exists(conn, "saved_searches"):
+            conn.execute("""
+            CREATE TABLE saved_searches (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name       TEXT NOT NULL,
+                filters    TEXT NOT NULL,
+                notify     INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now'))
+            )""")
+
+        if not _column_exists(conn, "offres", "vue_par"):
+            conn.execute("ALTER TABLE offres ADD COLUMN vue_par TEXT DEFAULT '[]'")
+        if not _column_exists(conn, "offres", "score_perso"):
+            conn.execute("ALTER TABLE offres ADD COLUMN score_perso TEXT DEFAULT '{}'")
+        if not _column_exists(conn, "offres", "actions"):
+            conn.execute("ALTER TABLE offres ADD COLUMN actions TEXT DEFAULT '{}'")
+
+    print("[DB] Migration V3 OK")
+
+
 CONFIG_DEFAULTS = [
     ("keywords_include",       json.dumps(["développement", "java", "python", "data"]),
      "Mots-clés obligatoires", "filtrage"),
@@ -226,7 +304,6 @@ CONFIG_DEFAULTS = [
 
 
 def _init_user_config_defaults(conn, user_id: int):
-    """Insère les valeurs par défaut pour un nouvel utilisateur."""
     conn.executemany("""
         INSERT OR IGNORE INTO user_config (user_id, key, value, label, section, updated_at)
         VALUES (?, ?, ?, ?, ?, datetime('now'))
@@ -235,15 +312,11 @@ def _init_user_config_defaults(conn, user_id: int):
 
 
 def _init_config_defaults_all_users(conn):
-    """S'assure que tous les users existants ont leurs defaults."""
     users = conn.execute("SELECT id FROM users").fetchall()
     for u in users:
         _init_user_config_defaults(conn, u["id"])
 
 
-# ---------------------------------------------------------------------------
-# Admin par défaut
-# ---------------------------------------------------------------------------
 def _create_default_admin(conn):
     existing = conn.execute("SELECT id FROM users WHERE role='admin'").fetchone()
     if existing:
@@ -330,7 +403,6 @@ def get_user_config(user_id: int, key: str) -> Any:
             (user_id, key)
         ).fetchone()
         if row is None:
-            # Retourner la valeur par défaut
             defaults = {k: json.loads(v) for k, v, _, _ in CONFIG_DEFAULTS}
             return defaults.get(key)
         return json.loads(row["value"])
@@ -348,7 +420,6 @@ def set_user_config(user_id: int, key: str, value: Any):
 
 
 def get_all_user_config(user_id: int) -> dict:
-    """Retourne toute la config d'un user, groupée par section."""
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT key, value, label, section, updated_at FROM user_config WHERE user_id = ?",
@@ -369,7 +440,6 @@ def get_all_user_config(user_id: int) -> dict:
 
 
 def reset_user_config(user_id: int):
-    """Remet les valeurs par défaut pour un utilisateur."""
     with get_conn() as conn:
         conn.execute("DELETE FROM user_config WHERE user_id = ?", (user_id,))
         _init_user_config_defaults(conn, user_id)
@@ -379,7 +449,6 @@ def reset_user_config(user_id: int):
 # CRUD — Offres
 # ---------------------------------------------------------------------------
 def insert_offre(offre: dict) -> Optional[int]:
-    """Insère une offre, retourne l'id ou None si doublon."""
     with get_conn() as conn:
         try:
             cur = conn.execute("""
@@ -397,7 +466,15 @@ def insert_offre(offre: dict) -> Optional[int]:
             ))
             return cur.lastrowid
         except sqlite3.IntegrityError:
-            return None  # doublon
+            return None
+
+
+def update_statut(offre_id: int, statut: str):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE offres SET statut=?, updated_at=datetime('now') WHERE id=?",
+            (statut, offre_id)
+        )
 
 
 def get_offres(
@@ -411,15 +488,8 @@ def get_offres(
     is_admin: bool = False,
     filter_user_id: int = None,
 ) -> list:
-    """
-    Retourne les offres avec le score de l'utilisateur courant.
-    - commercial : uniquement les offres qui matchent ses mots-clés
-    - admin : toutes les offres (ou celles d'un user via filter_user_id)
-    """
-    # Quel user_id utiliser pour les scores ?
     score_user = filter_user_id if (is_admin and filter_user_id) else user_id
 
-    # Mots-clés du user pour filtrer
     if not is_admin or filter_user_id:
         uid = filter_user_id if filter_user_id else user_id
         keywords = get_user_config(uid, "keywords_include") or []
@@ -430,7 +500,6 @@ def get_offres(
         params = []
         where_clauses = []
 
-        # Filtre mots-clés (commercial voit uniquement ses offres)
         if keywords and (not is_admin or filter_user_id):
             kw_conditions = " OR ".join(
                 ["(LOWER(o.titre) LIKE ? OR LOWER(o.description) LIKE ?)"] * len(keywords)
@@ -514,10 +583,6 @@ def get_offre_by_id(offre_id: int, user_id: int) -> Optional[dict]:
 
 
 def get_offres_to_score(user_id: int) -> list:
-    """
-    Offres qui matchent les mots-clés du user et n'ont pas encore
-    de score pour lui.
-    """
     keywords = get_user_config(user_id, "keywords_include") or []
     with get_conn() as conn:
         if keywords:
@@ -597,6 +662,10 @@ def insert_log(source: str, event: str, detail: str = "", user_id: int = None):
             INSERT INTO logs (source, event, detail, user_id, created_at)
             VALUES (?, ?, ?, ?, datetime('now'))
         """, (source, event, detail, user_id))
+
+
+# Alias pour compatibilité piter_scraper
+log_event = insert_log
 
 
 def get_logs(limit: int = 50, user_id: int = None) -> list:
@@ -684,12 +753,7 @@ def get_stats(user_id: int, is_admin: bool = False) -> dict:
 # Migration V1 → multi-user
 # ---------------------------------------------------------------------------
 def migrate_v1_to_multiuser():
-    """
-    À appeler UNE SEULE FOIS si vous avez une base V1 existante.
-    Crée un commercial 'legacy' et lui attribue les anciennes données.
-    """
     with get_conn() as conn:
-        # Vérifier si migration déjà faite
         legacy = conn.execute(
             "SELECT id FROM users WHERE email='legacy@localhost'"
         ).fetchone()
@@ -697,7 +761,6 @@ def migrate_v1_to_multiuser():
             print("[MIGRATION] Déjà effectuée.")
             return
 
-        # Créer le commercial legacy
         from api.auth import hash_password
         pw_hash = hash_password("changeme")
         cur = conn.execute("""
@@ -707,7 +770,6 @@ def migrate_v1_to_multiuser():
         """, (pw_hash,))
         user_id = cur.lastrowid
 
-        # Migrer les anciens scores sans user_id
         try:
             conn.execute(
                 "UPDATE scores SET user_id = ? WHERE user_id IS NULL", (user_id,)
@@ -715,7 +777,6 @@ def migrate_v1_to_multiuser():
         except Exception:
             pass
 
-        # Migrer config globale (table config V1/V2) si elle existe
         try:
             old_config = conn.execute("SELECT key, value, label, section FROM config").fetchall()
             for row in old_config:
@@ -726,7 +787,6 @@ def migrate_v1_to_multiuser():
         except Exception:
             _init_user_config_defaults(conn, user_id)
 
-        # Récupérer COMPANY_CONTEXT depuis l'env si dispo
         ctx = os.getenv("COMPANY_CONTEXT", "")
         if ctx:
             conn.execute("""
@@ -735,3 +795,291 @@ def migrate_v1_to_multiuser():
             """, (user_id, json.dumps(ctx)))
 
         print(f"[MIGRATION] Données V1 migrées vers user_id={user_id} (legacy@localhost / changeme)")
+
+
+# ---------------------------------------------------------------------------
+# Sources
+# ---------------------------------------------------------------------------
+def get_sources(active_only=False) -> list:
+    with get_conn() as conn:
+        q = "SELECT * FROM sources"
+        if active_only:
+            q += " WHERE active = 1"
+        q += " ORDER BY created_at ASC"
+        rows = conn.execute(q).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_source(source_id: int) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM sources WHERE id=?", (source_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def upsert_source(data: dict):
+    with get_conn() as conn:
+        conn.execute("""
+            INSERT INTO sources (name, display_name, base_url, list_url, auth_type,
+                                 cookies_json, config_json, active, confidence)
+            VALUES (:name, :display_name, :base_url, :list_url, :auth_type,
+                    :cookies_json, :config_json, :active, :confidence)
+            ON CONFLICT(name) DO UPDATE SET
+                display_name  = excluded.display_name,
+                base_url      = excluded.base_url,
+                list_url      = excluded.list_url,
+                auth_type     = excluded.auth_type,
+                cookies_json  = COALESCE(excluded.cookies_json, cookies_json),
+                config_json   = excluded.config_json,
+                active        = excluded.active,
+                confidence    = excluded.confidence
+        """, data)
+
+
+def update_source(source_id: int, fields: dict):
+    allowed = {"display_name", "list_url", "auth_type", "cookies_json",
+               "config_json", "active", "confidence", "last_scraped"}
+    sets = ", ".join(f"{k}=?" for k in fields if k in allowed)
+    vals = [v for k, v in fields.items() if k in allowed]
+    if not sets:
+        return
+    with get_conn() as conn:
+        conn.execute(f"UPDATE sources SET {sets} WHERE id=?", vals + [source_id])
+
+
+def delete_source(source_id: int):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM sources WHERE id=?", (source_id,))
+
+
+# ---------------------------------------------------------------------------
+# Tags
+# ---------------------------------------------------------------------------
+def get_tags_for_user(user_id: int) -> list:
+    with get_conn() as conn:
+        rows = conn.execute("""
+            SELECT label, color, COUNT(*) as count
+            FROM tags WHERE user_id=?
+            GROUP BY label, color
+            ORDER BY count DESC
+        """, (user_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_tags_for_offre(offre_id: int, user_id: int) -> list:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT label, color FROM tags WHERE offre_id=? AND user_id=?",
+            (offre_id, user_id)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def add_tag(offre_id: int, user_id: int, label: str, color: str = "#4f8ef7"):
+    with get_conn() as conn:
+        conn.execute("""
+            INSERT OR IGNORE INTO tags (offre_id, user_id, label, color)
+            VALUES (?, ?, ?, ?)
+        """, (offre_id, user_id, label.strip().lower(), color))
+
+
+def remove_tag(offre_id: int, user_id: int, label: str):
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM tags WHERE offre_id=? AND user_id=? AND label=?",
+            (offre_id, user_id, label)
+        )
+
+
+# ---------------------------------------------------------------------------
+# Saved searches
+# ---------------------------------------------------------------------------
+def get_saved_searches(user_id: int) -> list:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, name, filters, notify, created_at FROM saved_searches "
+            "WHERE user_id=? ORDER BY created_at DESC",
+            (user_id,)
+        ).fetchall()
+        return [
+            {"id": r["id"], "name": r["name"], "filters": json.loads(r["filters"]),
+             "notify": bool(r["notify"]), "created_at": r["created_at"]}
+            for r in rows
+        ]
+
+
+def save_search(user_id: int, name: str, filters: dict, notify: bool = False):
+    with get_conn() as conn:
+        conn.execute("""
+            INSERT INTO saved_searches (user_id, name, filters, notify)
+            VALUES (?, ?, ?, ?)
+        """, (user_id, name, json.dumps(filters), int(notify)))
+
+
+def delete_saved_search(search_id: int, user_id: int):
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM saved_searches WHERE id=? AND user_id=?",
+            (search_id, user_id)
+        )
+
+
+# ---------------------------------------------------------------------------
+# Vue / Action / Score perso
+# ---------------------------------------------------------------------------
+def mark_vue(offre_id: int, user_id: int):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT vue_par FROM offres WHERE id=?", (offre_id,)
+        ).fetchone()
+        if not row:
+            return
+        vues = json.loads(row["vue_par"] or "[]")
+        if user_id not in vues:
+            vues.append(user_id)
+            conn.execute(
+                "UPDATE offres SET vue_par=? WHERE id=?",
+                (json.dumps(vues), offre_id)
+            )
+
+
+def set_action(offre_id: int, user_id: int, action: Optional[str]):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT actions FROM offres WHERE id=?", (offre_id,)
+        ).fetchone()
+        actions = json.loads(row["actions"] or "{}") if row else {}
+        if action is None:
+            actions.pop(str(user_id), None)
+        else:
+            actions[str(user_id)] = action
+        conn.execute(
+            "UPDATE offres SET actions=? WHERE id=?",
+            (json.dumps(actions), offre_id)
+        )
+
+
+def set_score_perso(offre_id: int, user_id: int, score: Optional[float]):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT score_perso FROM offres WHERE id=?", (offre_id,)
+        ).fetchone()
+        scores = json.loads(row["score_perso"] or "{}") if row else {}
+        if score is None:
+            scores.pop(str(user_id), None)
+        else:
+            scores[str(user_id)] = score
+        conn.execute(
+            "UPDATE offres SET score_perso=? WHERE id=?",
+            (json.dumps(scores), offre_id)
+        )
+
+
+# ---------------------------------------------------------------------------
+# Recherche avancée
+# ---------------------------------------------------------------------------
+def search_offres(filters: dict, user_id: int, limit: int = 50, offset: int = 0) -> list:
+    tags = filters.get("tags", [])
+
+    with get_conn() as conn:
+        wheres = ["1=1"]
+        params = []
+
+        q = filters.get("q", "").strip()
+        if q:
+            parts = []
+            if filters.get("in_titre", True):
+                parts.append("o.titre LIKE ?")
+                params.append(f"%{q}%")
+            if filters.get("in_description", True):
+                parts.append("o.description LIKE ?")
+                params.append(f"%{q}%")
+            if filters.get("in_acheteur", False):
+                parts.append("o.acheteur LIKE ?")
+                params.append(f"%{q}%")
+            if parts:
+                wheres.append(f"({' OR '.join(parts)})")
+
+        if filters.get("score_min") is not None:
+            wheres.append("s.score >= ?")
+            params.append(filters["score_min"])
+        if filters.get("score_max") is not None:
+            wheres.append("s.score <= ?")
+            params.append(filters["score_max"])
+
+        recos = filters.get("recommandation") or []
+        if recos:
+            wheres.append(f"s.recommandation IN ({','.join('?'*len(recos))})")
+            params.extend(recos)
+
+        srcs = filters.get("source") or []
+        if srcs:
+            wheres.append(f"o.source IN ({','.join('?'*len(srcs))})")
+            params.extend(srcs)
+
+        statuts = filters.get("statut") or []
+        if statuts:
+            wheres.append(f"o.statut IN ({','.join('?'*len(statuts))})")
+            params.extend(statuts)
+
+        if filters.get("date_limite_from"):
+            wheres.append("o.date_limite >= ?")
+            params.append(filters["date_limite_from"])
+        if filters.get("date_limite_to"):
+            wheres.append("o.date_limite <= ?")
+            params.append(filters["date_limite_to"])
+
+        if filters.get("budget_min") is not None:
+            wheres.append("(o.budget_max >= ? OR o.budget_min >= ?)")
+            params.extend([filters["budget_min"], filters["budget_min"]])
+        if filters.get("budget_max") is not None:
+            wheres.append("(o.budget_min <= ? OR o.budget_min IS NULL)")
+            params.append(filters["budget_max"])
+
+        if filters.get("non_vues_seulement"):
+            wheres.append("(o.vue_par NOT LIKE ? OR o.vue_par IS NULL OR o.vue_par = '[]')")
+            params.append(f"%{user_id}%")
+        elif filters.get("vues_seulement"):
+            wheres.append("o.vue_par LIKE ?")
+            params.append(f"%{user_id}%")
+
+        for tag in tags:
+            wheres.append(
+                "EXISTS (SELECT 1 FROM tags t WHERE t.offre_id=o.id AND t.user_id=? AND t.label=?)"
+            )
+            params.extend([user_id, tag])
+
+        where_clause = " AND ".join(wheres)
+
+        sql = f"""
+            SELECT o.*,
+                   s.score, s.resume, s.points_forts, s.points_faibles,
+                   s.recommandation, s.created_at as score_date
+            FROM offres o
+            LEFT JOIN scores s ON s.offre_id = o.id AND s.user_id = {user_id}
+            WHERE {where_clause}
+            ORDER BY s.score DESC, o.created_at DESC
+            LIMIT ? OFFSET ?
+        """
+        params.extend([limit, offset])
+        rows = conn.execute(sql, params).fetchall()
+
+        results = []
+        for row in rows:
+            d = dict(row)
+            for field in ("points_forts", "points_faibles"):
+                if d.get(field):
+                    try:
+                        d[field] = json.loads(d[field])
+                    except Exception:
+                        pass
+            d["tags"] = get_tags_for_offre(d["id"], user_id)
+            d["action"] = json.loads(d.get("actions") or "{}").get(str(user_id))
+            d["score_perso_val"] = json.loads(d.get("score_perso") or "{}").get(str(user_id))
+            d["vue"] = user_id in json.loads(d.get("vue_par") or "[]")
+            for k in ["vue_par", "actions", "score_perso"]:
+                d.pop(k, None)
+            results.append(d)
+
+        return results

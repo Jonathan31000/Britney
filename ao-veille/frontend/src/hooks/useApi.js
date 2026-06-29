@@ -15,7 +15,6 @@ export function useApi() {
 
       const res = await fetch(path, { ...options, headers });
 
-      // Token expiré → déconnexion automatique
       if (res.status === 401) {
         logout();
         return null;
@@ -26,7 +25,6 @@ export function useApi() {
         throw new Error(err.detail || `Erreur ${res.status}`);
       }
 
-      // Pas de contenu (204)
       if (res.status === 204) return null;
 
       return res.json();
@@ -53,7 +51,6 @@ export function useApi() {
     [request]
   );
 
-  // Export CSV (réponse binaire)
   const downloadCsv = useCallback(async () => {
     const res = await fetch("/api/export/csv", {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -68,5 +65,5 @@ export function useApi() {
     URL.revokeObjectURL(url);
   }, [token]);
 
-  return { get, post, put, del, downloadCsv };
+  return { request, get, post, put, del, downloadCsv };
 }

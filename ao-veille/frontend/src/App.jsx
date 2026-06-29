@@ -3,13 +3,15 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-route
 import { AuthProvider, useAuth } from "./hooks/useAuth";
 import Sidebar from "./components/Sidebar";
 
-import Login        from "./pages/Login";
-import Dashboard    from "./pages/Dashboard";
-import Offres       from "./pages/Offres";
-import OffreDetail  from "./pages/OffreDetail";
-import Parametres   from "./pages/Parametres";
-import Logs         from "./pages/Logs";
-import AdminUsers   from "./pages/AdminUsers";
+import Login       from "./pages/Login";
+import Dashboard   from "./pages/Dashboard";
+import Offres      from "./pages/Offres";
+import OffreDetail from "./pages/OffreDetail";
+import Parametres  from "./pages/Parametres";
+import Logs        from "./pages/Logs";
+import AdminUsers  from "./pages/AdminUsers";
+import Sources     from "./pages/Sources";
+import Recherche   from "./pages/Recherche";
 
 function RequireAuth({ children }) {
   const { user, loading } = useAuth();
@@ -54,10 +56,7 @@ function AppRoutes() {
 
   return (
     <Routes>
-      <Route
-        path="/login"
-        element={user ? <Navigate to="/" replace /> : <Login />}
-      />
+      <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
 
       <Route path="/" element={
         <RequireAuth><AppLayout><Dashboard /></AppLayout></RequireAuth>
@@ -69,6 +68,14 @@ function AppRoutes() {
 
       <Route path="/offres/:id" element={
         <RequireAuth><AppLayout><OffreDetail /></AppLayout></RequireAuth>
+      } />
+
+      <Route path="/recherche" element={
+        <RequireAuth><AppLayout><Recherche /></AppLayout></RequireAuth>
+      } />
+
+      <Route path="/sources" element={
+        <RequireAuth><AppLayout><Sources /></AppLayout></RequireAuth>
       } />
 
       <Route path="/parametres" element={

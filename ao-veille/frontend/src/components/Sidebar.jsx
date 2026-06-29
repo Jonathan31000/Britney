@@ -3,18 +3,20 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 
 const LINKS_COMMERCIAL = [
-  { to: "/",           label: "Tableau de bord", icon: "📊" },
-  { to: "/offres",     label: "Appels d'offres",  icon: "📋" },
-  { to: "/parametres", label: "Paramètres",       icon: "⚙️" },
-  { to: "/logs",       label: "Activité",          icon: "📜" },
+  { to: "/",           label: "Tableau de bord" },
+  { to: "/offres",     label: "Appels d'offres" },
+  { to: "/sources",    label: "Sources" },
+  { to: "/parametres", label: "Paramètres" },
+  { to: "/logs",       label: "Activité" },
 ];
 
 const LINKS_ADMIN = [
-  { to: "/",                   label: "Tableau de bord", icon: "📊" },
-  { to: "/offres",             label: "Appels d'offres",  icon: "📋" },
-  { to: "/admin/utilisateurs", label: "Utilisateurs",     icon: "👥" },
-  { to: "/parametres",         label: "Paramètres",       icon: "⚙️" },
-  { to: "/logs",               label: "Activité",          icon: "📜" },
+  { to: "/",                   label: "Tableau de bord" },
+  { to: "/offres",             label: "Appels d'offres" },
+  { to: "/sources",            label: "Sources" },
+  { to: "/admin/utilisateurs", label: "Utilisateurs" },
+  { to: "/parametres",         label: "Paramètres" },
+  { to: "/logs",               label: "Activité" },
 ];
 
 export default function Sidebar() {
@@ -34,16 +36,16 @@ export default function Sidebar() {
         <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: 2 }}>Veille appels d'offres</div>
       </div>
       <nav style={{ flex: 1 }}>
-        {links.map(({ to, label, icon }) => (
+        {links.map(({ to, label }) => (
           <NavLink key={to} to={to} end={to === "/"}
             style={({ isActive }) => ({
-              display: "flex", alignItems: "center", gap: "0.65rem", padding: "0.6rem 1.25rem",
+              display: "flex", alignItems: "center", padding: "0.6rem 1.25rem",
               color: isActive ? "var(--accent)" : "var(--text-muted)",
               background: isActive ? "rgba(79,142,247,0.08)" : "transparent",
               textDecoration: "none", fontSize: "0.92rem", fontWeight: isActive ? 600 : 400,
               borderLeft: isActive ? "2px solid var(--accent)" : "2px solid transparent",
             })}>
-            <span>{icon}</span>{label}
+            {label}
           </NavLink>
         ))}
       </nav>

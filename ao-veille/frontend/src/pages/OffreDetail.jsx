@@ -1,6 +1,6 @@
 // src/pages/OffreDetail.jsx
 import React, { useState, useEffect, useCallback } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useLocation } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
 import { ScoreBadge, RecoBadge } from '../components/ScoreBadge'
 
@@ -46,7 +46,9 @@ function fmtBudget(min, max) {
 
 export default function OffreDetail() {
   const { id } = useParams()
-  const { get } = useApi()
+  const location = useLocation()
+  const from = location.state?.from || "/offres"
+  const { get, request } = useApi()
   const [o, setO] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
@@ -55,14 +57,18 @@ export default function OffreDetail() {
     setLoading(true)
     try {
       const data = await get(`/api/offres/${id}`)
-      if (data) setO(data)
-      else setError(true)
+      if (data) {
+        setO(data)
+        request(`/api/offres/${id}/vue`, { method: "POST" }).catch(() => {})
+      } else {
+        setError(true)
+      }
     } catch {
       setError(true)
     } finally {
       setLoading(false)
     }
-  }, [get, id])
+  }, [get, request, id])
 
   useEffect(() => { loadOffre() }, [loadOffre])
 
@@ -73,7 +79,7 @@ export default function OffreDetail() {
     <>
       <style>{css}</style>
       <div className="detail">
-        <Link to="/offres" className="detail-back">← Retour à la liste</Link>
+        <Link to={from} className="detail-back">← Retour à la liste</Link>
 
         <div className="detail-header">
           <h2 className="detail-titre">{o.titre}</h2>

@@ -39,6 +39,17 @@ from scraper.database import (
     update_user,
     update_last_login,
 )
+from scraper.database import (
+    get_sources, get_source, upsert_source, update_source, delete_source,
+    get_tags_for_user, get_tags_for_offre, add_tag, remove_tag,
+    get_saved_searches, save_search, delete_saved_search,
+    mark_vue, set_action as db_set_action,
+    set_score_perso, search_offres, migrate_v3,
+)
+from scraper.source_analyzer import analyze_url_sync
+from scraper.generic_scraper import run_generic_scraper
+
+migrate_v3()
 
 app = FastAPI(title="AO Veille API", version="2.0.0")
 
@@ -117,6 +128,197 @@ def change_password(
     if len(new_pw) < 6:
         raise HTTPException(status_code=400, detail="Mot de passe trop court (6 caractères min)")
     update_user(current_user["id"], password_hash=hash_password(new_pw))
+    return {"status": "ok"}
+
+
+# ===========================================================================
+# Sources
+# ===========================================================================
+@app.get("/api/sources")
+def api_get_sources(current_user=Depends(get_current_user)):
+    return get_sources()
+
+
+@app.post("/api/sources/analyze")
+def api_analyze_source(body: dict, current_user=Depends(get_current_user)):
+    url = body.get("url", "").strip()
+    if not url:
+        raise HTTPException(400, "url requis")
+    cookies = body.get("cookies", [])
+    result = analyze_url_sync(url, cookies or None)
+    if not result["success"]:
+        raise HTTPException(422, result["error"])
+    return result
+
+
+@app.post("/api/sources")
+def api_create_source(body: dict, current_user=Depends(get_current_user)):
+    data = {
+        "name": body["name"],
+        "display_name": body["display_name"],
+        "base_url": body["base_url"],
+        "list_url": body["list_url"],
+        "auth_type": body.get("auth_type", "none"),
+        "cookies_json": json.dumps(body["cookies_json"]) if body.get("cookies_json") else None,
+        "config_json": json.dumps(body["config_json"]) if body.get("config_json") else None,
+        "active": 1,
+        "confidence": body.get("confidence", 0.0),
+    }
+    upsert_source(data)
+    return {"status": "ok"}
+
+
+@app.put("/api/sources/{source_id}")
+def api_update_source(source_id: int, body: dict, current_user=Depends(get_current_user)):
+    fields = {}
+    for k in ["display_name", "list_url", "auth_type", "active", "confidence"]:
+        if k in body:
+            fields[k] = body[k]
+    if "config_json" in body:
+        fields["config_json"] = json.dumps(body["config_json"])
+    if "cookies_json" in body:
+        fields["cookies_json"] = json.dumps(body["cookies_json"])
+    update_source(source_id, fields)
+    return {"status": "ok"}
+
+
+@app.delete("/api/sources/{source_id}")
+def api_delete_source(source_id: int, current_user=Depends(get_current_user)):
+    src = get_source(source_id)
+    if src and src["name"] == "piter.at":
+        raise HTTPException(400, "Impossible de supprimer la source piter.at")
+    delete_source(source_id)
+    return {"status": "ok"}
+
+
+@app.post("/api/sources/{source_id}/test")
+def api_test_source(source_id: int, current_user=Depends(get_current_user)):
+    import asyncio
+    from scraper.source_analyzer import preview_offers, fetch_with_playwright
+
+    src = get_source(source_id)
+    if not src:
+        raise HTTPException(404, "Source introuvable")
+
+    config = json.loads(src.get("config_json") or "{}")
+    cookies = json.loads(src.get("cookies_json") or "[]")
+
+    loop = asyncio.new_event_loop()
+    fetch_result = loop.run_until_complete(
+        fetch_with_playwright(src["list_url"], cookies or None)
+    )
+    loop.close()
+
+    if not fetch_result["success"]:
+        raise HTTPException(422, fetch_result["error"])
+
+    previews = preview_offers(fetch_result["html"], config)
+    return {"status": "ok", "preview": previews}
+
+
+@app.post("/api/trigger/scrape/{source_id}")
+def api_trigger_scrape_source(source_id: int, current_user=Depends(get_current_user)):
+    src = get_source(source_id)
+    if not src:
+        raise HTTPException(404, "Source introuvable")
+    if src["name"] == "piter.at":
+        from scraper.piter_scraper import run_scraper
+        result = run_scraper()
+    else:
+        result = run_generic_scraper(source_id)
+    return result
+
+
+# ===========================================================================
+# Tags
+# ===========================================================================
+@app.get("/api/tags")
+def api_get_tags(current_user=Depends(get_current_user)):
+    return get_tags_for_user(current_user["id"])
+
+
+@app.post("/api/offres/{offre_id}/tags")
+def api_add_tag(offre_id: int, body: dict, current_user=Depends(get_current_user)):
+    label = body.get("label", "").strip()
+    color = body.get("color", "#4f8ef7")
+    if not label:
+        raise HTTPException(400, "label requis")
+    add_tag(offre_id, current_user["id"], label, color)
+    return {"status": "ok"}
+
+
+@app.delete("/api/offres/{offre_id}/tags/{label}")
+def api_remove_tag(offre_id: int, label: str, current_user=Depends(get_current_user)):
+    remove_tag(offre_id, current_user["id"], label)
+    return {"status": "ok"}
+
+
+# ===========================================================================
+# Vue / Action / Score perso
+# ===========================================================================
+@app.post("/api/offres/{offre_id}/vue")
+def api_mark_vue(offre_id: int, current_user=Depends(get_current_user)):
+    mark_vue(offre_id, current_user["id"])
+    return {"status": "ok"}
+
+
+@app.post("/api/offres/{offre_id}/action")
+def api_set_action(offre_id: int, body: dict, current_user=Depends(get_current_user)):
+    action = body.get("action")
+    db_set_action(offre_id, current_user["id"], action)
+    return {"status": "ok"}
+
+
+@app.put("/api/offres/{offre_id}/action")
+def api_set_action_legacy(
+    offre_id: int,
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+):
+    action = body.get("action")
+    if action not in ("ignore", "repondu", "gagne", "perdu", None):
+        raise HTTPException(status_code=422, detail="Action invalide")
+    set_offre_action(offre_id, current_user["id"], action, body.get("note"))
+    return {"status": "ok"}
+
+
+@app.post("/api/offres/{offre_id}/score-perso")
+def api_set_score_perso(offre_id: int, body: dict, current_user=Depends(get_current_user)):
+    score = body.get("score")
+    set_score_perso(offre_id, current_user["id"], score)
+    return {"status": "ok"}
+
+
+# ===========================================================================
+# Recherche avancée
+# ===========================================================================
+@app.post("/api/search")
+def api_search(body: dict, current_user=Depends(get_current_user)):
+    limit = min(body.pop("limit", 50), 200)
+    offset = body.pop("offset", 0)
+    results = search_offres(body, current_user["id"], limit, offset)
+    return results
+
+
+@app.get("/api/search/saved")
+def api_get_saved_searches(current_user=Depends(get_current_user)):
+    return get_saved_searches(current_user["id"])
+
+
+@app.post("/api/search/saved")
+def api_save_search(body: dict, current_user=Depends(get_current_user)):
+    name = body.get("name", "").strip()
+    filters = body.get("filters", {})
+    notify = body.get("notify", False)
+    if not name:
+        raise HTTPException(400, "name requis")
+    save_search(current_user["id"], name, filters, notify)
+    return {"status": "ok"}
+
+
+@app.delete("/api/search/saved/{search_id}")
+def api_delete_saved_search(search_id: int, current_user=Depends(get_current_user)):
+    delete_saved_search(search_id, current_user["id"])
     return {"status": "ok"}
 
 
@@ -237,7 +439,6 @@ def reset_config(current_user: dict = Depends(get_current_user)):
     return {"status": "ok", "message": "Configuration réinitialisée aux valeurs par défaut"}
 
 
-# Admin : lire/modifier la config d'un autre utilisateur
 @app.get("/api/admin/users/{user_id}/config")
 def admin_get_user_config(user_id: int, admin: dict = Depends(require_admin)):
     user = get_user_by_id(user_id)
@@ -269,7 +470,7 @@ def list_offres(
     score_min: Optional[float] = None,
     limit: int = Query(default=50, le=200),
     offset: int = 0,
-    user_id_filter: Optional[int] = None,  # admin seulement
+    user_id_filter: Optional[int] = None,
     current_user: dict = Depends(get_current_user),
 ):
     is_admin = current_user["role"] == "admin"
@@ -294,19 +495,6 @@ def detail_offre(offre_id: int, current_user: dict = Depends(get_current_user)):
     if not offre:
         raise HTTPException(status_code=404, detail="Offre introuvable")
     return offre
-
-
-@app.put("/api/offres/{offre_id}/action")
-def set_action(
-    offre_id: int,
-    body: dict,
-    current_user: dict = Depends(get_current_user),
-):
-    action = body.get("action")
-    if action not in ("ignore", "repondu", "gagne", "perdu", None):
-        raise HTTPException(status_code=422, detail="Action invalide")
-    set_offre_action(offre_id, current_user["id"], action, body.get("note"))
-    return {"status": "ok"}
 
 
 # ===========================================================================
@@ -343,7 +531,6 @@ def logs(
 # ===========================================================================
 @app.post("/api/trigger/scrape")
 def trigger_scrape(admin: dict = Depends(require_admin)):
-    """Scraping manuel — admin uniquement."""
     try:
         from scraper.piter_scraper import run_scraper
         result = run_scraper()
@@ -356,7 +543,6 @@ def trigger_scrape(admin: dict = Depends(require_admin)):
 
 @app.post("/api/trigger/score")
 def trigger_score(current_user: dict = Depends(get_current_user)):
-    """Scoring pour l'utilisateur connecté (ou tous si admin sans paramètre)."""
     try:
         from scraper.ai_scorer import run_scorer, run_scorer_all_users
         is_admin = current_user["role"] == "admin"

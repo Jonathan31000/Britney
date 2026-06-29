@@ -14,8 +14,8 @@ import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
-from .database import insert_offre, update_statut, log_event
-from .rules import load_rules, apply_rules
+from .database import insert_offre, update_statut, insert_log as log_event
+from .rules import load_rules_for_user, apply_rules
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -32,7 +32,6 @@ LIST_URL = f"{BASE_URL}/prestataire/consultation"
 # ---------------------------------------------------------------------------
 # Session
 # ---------------------------------------------------------------------------
-
 def create_session() -> requests.Session:
     session = requests.Session()
     session.headers.update({
@@ -63,7 +62,7 @@ def load_session_from_cookies(session: requests.Session) -> bool:
                 logger.info(f"[piter] Connecté via cookies.json → {resp.url}")
                 log_event("piter.at", "login_ok", "cookies.json")
                 return True
-            logger.warning("[piter] cookies.json présent mais session invalide (expirée ?)")
+            logger.warning("[piter] cookies.json expiré — tentative Playwright...")
         except Exception as e:
             logger.warning(f"[piter] Erreur lecture cookies.json : {e}")
 
@@ -79,9 +78,31 @@ def load_session_from_cookies(session: requests.Session) -> bool:
             logger.info(f"[piter] Connecté via PITER_SESSION_COOKIE → {resp.url}")
             log_event("piter.at", "login_ok", "session_cookie")
             return True
-        logger.warning("[piter] PITER_SESSION_COOKIE invalide ou expiré")
+        logger.warning("[piter] PITER_SESSION_COOKIE invalide — tentative Playwright...")
 
-    # --- Méthode 3 : login classique ---
+    # --- Méthode 3 : Playwright (refresh automatique) ---
+    logger.info("[piter] Tentative renouvellement cookies via Playwright...")
+    try:
+        from .auth_playwright import ensure_cookies
+        if ensure_cookies():
+            session.cookies.clear()
+            with open(COOKIES_FILE, "r") as f:
+                cookies = json.load(f)
+            for c in cookies:
+                session.cookies.set(
+                    c.get("name", ""),
+                    c.get("value", ""),
+                    domain=c.get("domain", "piter.at").lstrip(".")
+                )
+            resp = session.get(LIST_URL, timeout=15, allow_redirects=True)
+            if "connexion" not in resp.url and resp.status_code == 200:
+                logger.info(f"[piter] Connecté via Playwright → {resp.url}")
+                log_event("piter.at", "login_ok", "playwright")
+                return True
+    except Exception as e:
+        logger.error(f"[piter] Playwright échoué : {e}")
+
+    # --- Méthode 4 : login classique ---
     logger.info("[piter] Tentative login classique...")
     return login_classic(session)
 
@@ -128,7 +149,6 @@ def login_classic(session: requests.Session) -> bool:
 # ---------------------------------------------------------------------------
 # Pagination
 # ---------------------------------------------------------------------------
-
 def get_page_urls(session: requests.Session) -> List[str]:
     urls = [LIST_URL]
     try:
@@ -151,7 +171,6 @@ def get_page_urls(session: requests.Session) -> List[str]:
 # ---------------------------------------------------------------------------
 # Parsing
 # ---------------------------------------------------------------------------
-
 def parse_row(row: BeautifulSoup) -> Optional[dict]:
     try:
         tds = row.find_all("td")
@@ -277,80 +296,9 @@ def _norm_date(text: str) -> str:
 # ---------------------------------------------------------------------------
 # Point d'entrée
 # ---------------------------------------------------------------------------
-
-def load_session_from_cookies(session: requests.Session) -> bool:
-    """
-    Méthode 1 : cookies.json
-    Méthode 2 : PITER_SESSION_COOKIE dans .env
-    Méthode 3 : Playwright (refresh automatique)
-    Méthode 4 : login classique (fallback)
-    """
-
-    # --- Méthode 1 : fichier cookies.json ---
-    if os.path.exists(COOKIES_FILE):
-        try:
-            with open(COOKIES_FILE, "r") as f:
-                cookies = json.load(f)
-            for c in cookies:
-                session.cookies.set(
-                    c.get("name", ""),
-                    c.get("value", ""),
-                    domain=c.get("domain", "piter.at").lstrip(".")
-                )
-            resp = session.get(LIST_URL, timeout=15, allow_redirects=True)
-            if "connexion" not in resp.url and resp.status_code == 200:
-                logger.info(f"[piter] Connecté via cookies.json → {resp.url}")
-                log_event("piter.at", "login_ok", "cookies.json")
-                return True
-            logger.warning("[piter] cookies.json expiré — tentative Playwright...")
-        except Exception as e:
-            logger.warning(f"[piter] Erreur lecture cookies.json : {e}")
-
-    # --- Méthode 2 : cookie manuel dans .env ---
-    if SESSION_COOKIE:
-        for pair in SESSION_COOKIE.split(";"):
-            pair = pair.strip()
-            if "=" in pair:
-                name, value = pair.split("=", 1)
-                session.cookies.set(name.strip(), value.strip(), domain="piter.at")
-        resp = session.get(LIST_URL, timeout=15, allow_redirects=True)
-        if "connexion" not in resp.url and resp.status_code == 200:
-            logger.info(f"[piter] Connecté via PITER_SESSION_COOKIE → {resp.url}")
-            log_event("piter.at", "login_ok", "session_cookie")
-            return True
-        logger.warning("[piter] PITER_SESSION_COOKIE invalide — tentative Playwright...")
-
-    # --- Méthode 3 : Playwright (refresh automatique) ---
-    logger.info("[piter] Tentative renouvellement cookies via Playwright...")
-    try:
-        from .auth_playwright import ensure_cookies
-        if ensure_cookies():
-            # Recharger les cookies fraîchement générés
-            session.cookies.clear()
-            with open(COOKIES_FILE, "r") as f:
-                cookies = json.load(f)
-            for c in cookies:
-                session.cookies.set(
-                    c.get("name", ""),
-                    c.get("value", ""),
-                    domain=c.get("domain", "piter.at").lstrip(".")
-                )
-            resp = session.get(LIST_URL, timeout=15, allow_redirects=True)
-            if "connexion" not in resp.url and resp.status_code == 200:
-                logger.info(f"[piter] Connecté via Playwright → {resp.url}")
-                log_event("piter.at", "login_ok", "playwright")
-                return True
-    except Exception as e:
-        logger.error(f"[piter] Playwright échoué : {e}")
-
-    # --- Méthode 4 : login classique ---
-    logger.info("[piter] Tentative login classique...")
-    return login_classic(session)
-
 def run_scraper():
     logger.info("[piter] Démarrage scraping...")
-    # Les règles sont rechargées depuis la DB à chaque scraping
-    rules = load_rules()
+    rules = load_rules_for_user(1)
 
     session = create_session()
     if not load_session_from_cookies(session):
